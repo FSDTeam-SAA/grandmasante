@@ -1,3 +1,4 @@
+// models/user.model.js - Updated
 import mongoose, { Schema } from "mongoose";
 import bcrypt from "bcryptjs";
 
@@ -8,7 +9,7 @@ const userSchema = new Schema(
     password: { type: String, select: 0 },
     username: { type: String },
     phone: { type: String },
-    credit: { type: Number, default: null },
+    credit: { type: Number, default: 0 },
     dob: { type: Date },
     gender: {
       type: String,
@@ -17,7 +18,12 @@ const userSchema = new Schema(
     role: {
       type: String,
       default: "user",
-      enum: ["user", "admin"],
+      enum: ["user", "commercial", "in_house", "admin"],
+    },
+    status: {
+      type: String,
+      enum: ["pending", "accepted", "declined"],
+      default: "accepted",
     },
     avatar: {
       public_id: { type: String, default: "" },
@@ -57,7 +63,6 @@ const userSchema = new Schema(
     ],
     currentPlan: {
       type: String,
-      default: "Traveler",
     },
     subscription: {
       type: Schema.Types.ObjectId,
@@ -94,6 +99,14 @@ userSchema.pre("save", async function (next) {
     const saltRounds = Number(process.env.bcrypt_salt_round) || 10;
     user.password = await bcrypt.hash(user.password, saltRounds);
   }
+  if (user.role !== "admin") {
+    if (user.role === "commercial" || user.role === "in_house") {
+      user.status = "pending";
+    } else {
+      user.status = "accepted";
+    }
+  }
+
   next();
 });
 

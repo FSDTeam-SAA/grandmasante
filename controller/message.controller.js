@@ -2,9 +2,9 @@ import mongoose from "mongoose";
 import { Chat } from "../models/chat.model.js";
 import { Message } from "../models/message.model.js";
 import { sendResponse, uploadOnCloudinary } from "../utility/helper.js";
-import AppError from "../errors/appError.js";
 import catchAsync from "../utility/catchAsync.js";
 import { getIO } from "../app.js";
+import AppError from "../errors/AppError.js";
 
 const publicUserFields = "name phone profileImage email";
 

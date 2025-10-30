@@ -12,6 +12,7 @@ const userSubscriptionSchema = new Schema(
       ref: "SubscriptionPlan",
       required: true,
     },
+    creditsUsed: { type: Number, default: 0 },
     startDate: {
       type: Date,
       required: true,

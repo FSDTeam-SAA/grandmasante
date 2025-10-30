@@ -8,12 +8,17 @@ import { sendEmail } from "../utils/sendEmail.js";
 import { User } from "./../model/user.model.js";
 
 export const register = catchAsync(async (req, res) => {
-  const { name, email, phone, password, confirmPassword } = req.body;
-
+  const {
+    name,
+    email,
+    phone,
+    password,
+    confirmPassword,
+    role = "user",
+  } = req.body;
   if (!email || !password) {
     throw new AppError(httpStatus.FORBIDDEN, "Please fill in all fields");
   }
-
   if (password !== confirmPassword) {
     throw new AppError(
       httpStatus.FORBIDDEN,
@@ -26,15 +31,14 @@ export const register = catchAsync(async (req, res) => {
       httpStatus.BAD_REQUEST,
       "Email already exists, please try another email"
     );
-
   const user = await User.create({
     name,
     email,
     phone,
     password,
+    role,
     verificationInfo: { token: "", verified: true },
   });
-
   const jwtPayload = {
     _id: user._id,
     email: user.email,
@@ -45,7 +49,6 @@ export const register = catchAsync(async (req, res) => {
     process.env.JWT_ACCESS_SECRET,
     process.env.JWT_ACCESS_EXPIRES_IN
   );
-
   const refreshToken = createToken(
     jwtPayload,
     process.env.JWT_REFRESH_SECRET,
@@ -53,11 +56,8 @@ export const register = catchAsync(async (req, res) => {
   );
   user.refreshToken = refreshToken;
   await user.save();
-  user.accessToken = accessToken;
-
   const userObj = user.toObject();
   userObj.accessToken = accessToken;
-
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
@@ -278,28 +278,25 @@ export const changePassword = catchAsync(async (req, res) => {
 
 export const refreshToken = catchAsync(async (req, res) => {
   const { refreshToken } = req.body;
-
   if (!refreshToken) {
     throw new AppError(400, "Refresh token is required");
   }
-
   const decoded = verifyToken(refreshToken, process.env.JWT_REFRESH_SECRET);
   const user = await User.findById(decoded._id);
   if (!user || user.refreshToken !== refreshToken) {
     throw new AppError(401, "Invalid refresh token");
   }
+
   const jwtPayload = {
     _id: user._id,
     email: user.email,
     role: user.role,
   };
-
   const accessToken = createToken(
     jwtPayload,
     process.env.JWT_ACCESS_SECRET,
     process.env.JWT_ACCESS_EXPIRES_IN
   );
-
   const refreshToken1 = createToken(
     jwtPayload,
     process.env.JWT_REFRESH_SECRET,
@@ -307,7 +304,6 @@ export const refreshToken = catchAsync(async (req, res) => {
   );
   user.refreshToken = refreshToken1;
   await user.save();
-
   sendResponse(res, {
     statusCode: 200,
     success: true,
@@ -330,3 +326,12 @@ export const logout = catchAsync(async (req, res) => {
     data: "",
   });
 });
+
+export const authorizeRole = (...roles) => {
+  return catchAsync(async (req, res, next) => {
+    if (!roles.includes(req.user.role)) {
+      throw new AppError(httpStatus.FORBIDDEN, "Access denied for this role");
+    }
+    next();
+  });
+};
