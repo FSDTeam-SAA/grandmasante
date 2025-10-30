@@ -6,16 +6,19 @@ const subscriptionPlanSchema = new Schema(
       type: String,
       required: true,
       unique: true,
+      enum: ["Basic", "Premium", "Extreme"],
     },
     priceMonthly: {
       type: Number,
       required: true,
-      default: 0,
     },
     priceYearly: {
       type: Number,
       required: true,
-      default: 0,
+    },
+    credits: {
+      type: Number,
+      required: true,
     },
     benefits: [
       {
@@ -25,14 +28,6 @@ const subscriptionPlanSchema = new Schema(
     hasAds: {
       type: Boolean,
       default: false,
-    },
-    maxItems: {
-      type: Number,
-      default: Infinity,
-    },
-    maxCurrencies: {
-      type: Number,
-      default: Infinity,
     },
     isActive: {
       type: Boolean,

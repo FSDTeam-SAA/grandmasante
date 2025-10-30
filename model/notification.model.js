@@ -18,13 +18,6 @@ const notificationSchema = new Schema(
     },
     type: {
       type: String,
-      enum: [
-        "price_increase",
-        "subscription_update",
-        "savings_alert",
-        "general",
-      ],
-      default: "general",
     },
     relatedProduct: {
       type: Schema.Types.ObjectId,

@@ -2,7 +2,6 @@ import httpStatus from "http-status";
 import { SubscriptionPlan } from "../model/subcriptionPlan.model.js";
 import { UserSubscription } from "../model/userSubcription.model.js";
 import { User } from "../model/user.model.js";
-import { Coupon } from "../model/coupon.model.js";
 import { Notification } from "../model/notification.model.js";
 import { io } from "../server.js";
 import AppError from "../errors/AppError.js";
@@ -15,7 +14,7 @@ const stripeInstance = stripe(process.env.STRIPE_SECRET_KEY);
 
 export const getSubscriptionPlans = catchAsync(async (req, res) => {
   const plans = await SubscriptionPlan.find({ isActive: true }).select(
-    "name priceMonthly priceYearly benefits hasAds maxItems maxCurrencies"
+    "name priceMonthly priceYearly credits benefits hasAds"
   );
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -25,20 +24,87 @@ export const getSubscriptionPlans = catchAsync(async (req, res) => {
   });
 });
 
+// Admin CRUD for plans
+export const getSubscriptionPlansAdmin = catchAsync(async (req, res) => {
+  const plans = await SubscriptionPlan.find().select("-__v");
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Plans fetched successfully",
+    data: plans,
+  });
+});
+
+export const addSubscriptionPlan = catchAsync(async (req, res) => {
+  const { name, priceMonthly, priceYearly, credits, benefits, hasAds } =
+    req.body;
+  const defaultBenefits = {
+    Basic:
+      "Buy the plan and get guidance from a specialist through text messages.",
+    Premium:
+      "Buy the plan for expert guidance through phone calls every 5 days.",
+    Extreme: "Buy the plan for expert calls and in-person visits.",
+  };
+  const planData = {
+    name,
+    priceMonthly,
+    priceYearly,
+    credits,
+    benefits: benefits || [defaultBenefits[name]],
+    hasAds: hasAds || name === "Basic",
+  };
+  const plan = await SubscriptionPlan.create(planData);
+  sendResponse(res, {
+    statusCode: httpStatus.CREATED,
+    success: true,
+    message: "Plan added successfully",
+    data: plan,
+  });
+});
+
+export const updateSubscriptionPlan = catchAsync(async (req, res) => {
+  const plan = await SubscriptionPlan.findByIdAndUpdate(
+    req.params.id,
+    req.body,
+    { new: true }
+  );
+  if (!plan) throw new AppError(httpStatus.NOT_FOUND, "Plan not found");
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Plan updated successfully",
+    data: plan,
+  });
+});
+
+export const toggleSubscriptionPlan = catchAsync(async (req, res) => {
+  const { action } = req.body;
+  let plan;
+  if (action === "delete") {
+    plan = await SubscriptionPlan.findByIdAndDelete(req.params.id);
+  } else {
+    plan = await SubscriptionPlan.findByIdAndUpdate(
+      req.params.id,
+      { isActive: action === "active" },
+      { new: true }
+    );
+  }
+  if (!plan) throw new AppError(httpStatus.NOT_FOUND, "Plan not found");
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: `Plan ${action}d successfully`,
+    data: plan,
+  });
+});
+
 export const createSubscriptionPayment = catchAsync(async (req, res) => {
-  const { planId, isYearly, couponCode, email, phone, country } = req.body;
+  const { planId } = req.body;
   const userId = req.user._id;
+  const user = await User.findById(userId);
 
   if (!planId) {
     throw new AppError(httpStatus.BAD_REQUEST, "Plan ID is required");
-  }
-
-  // Validate billing details
-  if (!email || !phone || !country) {
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      "Billing details (email, phone, country) are required"
-    );
   }
 
   const plan = await SubscriptionPlan.findById(planId);
@@ -46,48 +112,22 @@ export const createSubscriptionPayment = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.NOT_FOUND, "Plan not found");
   }
 
-  let discount = 0;
-  let finalPrice = isYearly ? plan.priceYearly : plan.priceMonthly;
-  let couponUsed = null;
-  if (couponCode) {
-    const coupon = await Coupon.findOne({
-      code: couponCode,
-      status: "active",
-      applicablePlans: { $in: [plan.name] },
-    });
+  const finalPrice = plan.price;
+  const discount = 0;
 
-    if (
-      !coupon ||
-      new Date() > coupon.expiryDate ||
-      (coupon.usageLimit > 0 && coupon.usedCount >= coupon.usageLimit)
-    ) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Invalid coupon");
-    }
-    if (coupon.discountType === "percent") {
-      discount = (finalPrice * coupon.discountValue) / 100;
-    } else {
-      discount = coupon.discountValue;
-    }
-    finalPrice -= discount;
-    couponUsed = couponCode;
-    await Coupon.findByIdAndUpdate(coupon._id, { $inc: { usedCount: 1 } });
-  }
-
-  // Create or retrieve Stripe customer with billing details
   let customer;
   try {
     customer = await stripeInstance.customers.create({
-      email,
-      phone,
-      address: {
-        country,
-      },
+      email: user.email,
       metadata: {
         userId: userId.toString(),
       },
     });
   } catch (error) {
-    customer = await stripeInstance.customers.list({ email }).data[0];
+    const customers = await stripeInstance.customers.list({
+      email: user.email,
+    });
+    customer = customers.data[0];
     if (!customer) {
       throw new AppError(
         httpStatus.INTERNAL_SERVER_ERROR,
@@ -104,22 +144,17 @@ export const createSubscriptionPayment = catchAsync(async (req, res) => {
     metadata: {
       userId: userId.toString(),
       planId: planId.toString(),
-      isYearly: isYearly.toString(),
-      couponUsed: couponUsed || "",
     },
   });
 
-  // Save payment record as pending
   const subscriptionPayment = new PaymentInfo({
     userId,
     planId,
-    price: isYearly ? plan.priceYearly : plan.priceMonthly,
+    price: finalPrice,
     discount,
     finalPrice,
     transactionId: paymentIntent.id,
     paymentStatus: "pending",
-    couponUsed,
-    isYearly,
     type: "subscription",
   });
   await subscriptionPayment.save();
@@ -132,7 +167,6 @@ export const createSubscriptionPayment = catchAsync(async (req, res) => {
       transactionId: paymentIntent.id,
       clientSecret: paymentIntent.client_secret,
       finalPrice,
-      discount,
       customerId: customer.id,
     },
   });
@@ -169,27 +203,27 @@ export const confirmSubscriptionPayment = catchAsync(async (req, res) => {
       subscriptionPayment.paymentMethod = paymentIntent.payment_method_types[0];
       await subscriptionPayment.save();
 
-      // Create UserSubscription on success
+      // Create UserSubscription on success (1 month validity)
       const startDate = new Date();
       const endDate = new Date(startDate);
-      endDate.setFullYear(
-        endDate.getFullYear() + (subscriptionPayment.isYearly ? 1 : 0.083)
-      );
+      endDate.setMonth(endDate.getMonth() + 1);
 
       const userSub = await UserSubscription.create({
         user: userId,
         plan: subscriptionPayment.planId._id,
+        creditsUsed: 0,
         startDate,
         endDate,
         status: "active",
         paymentMethod: "stripe",
         stripeSubscriptionId: paymentIntentId,
-        couponUsed: subscriptionPayment.couponUsed || null,
       });
 
+      // Update user with plan and add credits
       await User.findByIdAndUpdate(userId, {
         currentPlan: subscriptionPayment.planId.name,
         subscription: userSub._id,
+        $inc: { credit: subscriptionPayment.planId.credits || 0 },
       });
 
       // Notification for subscription purchase
