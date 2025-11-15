@@ -1,19 +1,17 @@
 import express from "express";
 import {
-  createChat,
   sendMessage,
   getChats,
   getMessages,
-} from "../controllers/message.controller.js";
-import { isAuthenticated } from "../middlewares/auth.middlewares.js";
-import upload from "../middlewares/multer.middlewares.js";
+} from "../controller/message.controller.js";
+import { protect } from "../middleware/auth.middleware.js";
+import upload from "../middleware/multer.middleware.js";
 
 const router = express.Router();
-router.use(isAuthenticated);
+router.use(protect);
 
-router.post("/create", createChat);
-router.post("/:chatId/message", upload.array("files"), sendMessage);
-router.get("/", getChats);
-router.get("/:chatId/messages", getMessages);
+router.post("/send", upload.array("files"), sendMessage);
+router.get("/chats", getChats);
+router.get("/:userId/messages", getMessages);
 
 export default router;

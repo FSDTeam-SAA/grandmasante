@@ -5,16 +5,13 @@ const paymentInfoSchema = new Schema(
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
-      required: true,
     },
     planId: {
       type: Schema.Types.ObjectId,
       ref: "SubscriptionPlan",
-      required: true,
     },
     price: {
       type: Number,
-      required: true,
     },
     discount: {
       type: Number,
@@ -22,11 +19,9 @@ const paymentInfoSchema = new Schema(
     },
     finalPrice: {
       type: Number,
-      required: true,
     },
     transactionId: {
       type: String,
-      required: true,
     },
     paymentStatus: {
       type: String,

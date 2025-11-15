@@ -1,41 +1,18 @@
-import mongoose, { Schema } from "mongoose";
+import mongoose from "mongoose";
 
-const userSubscriptionSchema = new Schema(
+const userSubscriptionSchema = new mongoose.Schema(
   {
-    user: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     plan: {
-      type: Schema.Types.ObjectId,
+      type: mongoose.Schema.Types.ObjectId,
       ref: "SubscriptionPlan",
       required: true,
     },
-    creditsUsed: { type: Number, default: 0 },
-    startDate: {
-      type: Date,
-      required: true,
-    },
-    endDate: {
-      type: Date,
-      required: true,
-    },
-    status: {
-      type: String,
-      enum: ["active", "inactive", "expired"],
-      default: "active",
-    },
-    paymentMethod: {
-      type: String,
-      default: "stripe",
-    },
-    stripeSubscriptionId: {
-      type: String,
-    },
-    couponUsed: {
-      type: String,
-    },
+    creditsRemaining: { type: Number, required: true },
+    status: { type: String, enum: ["active", "inactive"], default: "active" },
+    paymentMethod: { type: String, default: "stripe" },
+    stripeTransactionId: { type: String },
+    startDate: { type: Date, default: Date.now },
   },
   { timestamps: true }
 );

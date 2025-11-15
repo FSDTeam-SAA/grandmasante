@@ -15,7 +15,6 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
   const { useCart = true } = req.query;
   const userId = req.user._id;
   const user = await User.findById(userId);
-
   let products = [];
   let total = 0;
 
@@ -30,15 +29,25 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
       price: item.product.perPrice,
     }));
   } else {
-    const { products: directProducts } = req.body; // Fallback: direct [{productId, quantity}]
-    if (!directProducts || directProducts.length === 0) {
-      throw new AppError(httpStatus.BAD_REQUEST, "Products required");
+    const { products: directProducts } = req.body;
+    if (
+      !directProducts ||
+      !Array.isArray(directProducts) ||
+      directProducts.length === 0
+    ) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Products required as array");
     }
     products = directProducts;
   }
 
   // Validate stock and calculate total
   for (let item of products) {
+    if (!item.productId || !item.quantity || item.quantity < 1) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Invalid productId or quantity in items"
+      );
+    }
     const product = await Product.findById(item.productId);
     if (!product) {
       throw new AppError(
@@ -46,7 +55,7 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
         `Product ${item.productId} not found`
       );
     }
-    if (product.remainingAmount < item.quantity) {
+    if (product.remainingUnit < item.quantity) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
         `Insufficient stock for ${product.name}`
@@ -55,23 +64,17 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
     total += product.perPrice * item.quantity;
   }
 
+  // Create or reuse Stripe customer
   let customer;
-  try {
+  const existingCustomers = await stripeInstance.customers.list({
+    email: user.email,
+  });
+  customer = existingCustomers.data[0];
+  if (!customer) {
     customer = await stripeInstance.customers.create({
       email: user.email,
       metadata: { userId: userId.toString() },
     });
-  } catch (error) {
-    const customers = await stripeInstance.customers.list({
-      email: user.email,
-    });
-    customer = customers.data[0];
-    if (!customer) {
-      throw new AppError(
-        httpStatus.INTERNAL_SERVER_ERROR,
-        "Failed to create/retrieve customer"
-      );
-    }
   }
 
   const paymentIntent = await stripeInstance.paymentIntents.create({
@@ -94,6 +97,7 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
       product: p.productId,
       quantity: p.quantity,
     })),
+    status: "ongoing",
     total,
     payment: { transactionId: paymentIntent.id, status: "pending" },
   });
@@ -102,6 +106,7 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
   // Save payment record
   const paymentRecord = new PaymentInfo({
     userId,
+    planId: null,
     price: total,
     finalPrice: total,
     transactionId: paymentIntent.id,
@@ -115,7 +120,7 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
     success: true,
     message: "Checkout created, proceed to payment",
     data: {
-      orderId: order.orderId,
+      orderId: order._id,
       transactionId: paymentIntent.id,
       clientSecret: paymentIntent.client_secret,
       total,
@@ -128,7 +133,6 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
 export const confirmCheckoutPayment = catchAsync(async (req, res) => {
   const { paymentIntentId, paymentMethodId } = req.body;
   const userId = req.user._id;
-
   if (!paymentIntentId || !paymentMethodId) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
@@ -137,14 +141,41 @@ export const confirmCheckoutPayment = catchAsync(async (req, res) => {
   }
 
   try {
-    const paymentIntent = await stripeInstance.paymentIntents.confirm(
+    // Fetch PaymentIntent status from Stripe
+    const paymentIntent = await stripeInstance.paymentIntents.retrieve(
+      paymentIntentId
+    );
+
+    // Handle already succeeded PaymentIntent gracefully
+    if (paymentIntent.status === "succeeded") {
+      const order = await Order.findOne({
+        "payment.transactionId": paymentIntentId,
+      });
+      return sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message: "Payment has already been completed",
+        data: {
+          orderId: order?._id,
+          transactionId: paymentIntent.id,
+        },
+      });
+    }
+
+    // Confirm payment
+    const confirmedPayment = await stripeInstance.paymentIntents.confirm(
       paymentIntentId,
-      { payment_method: paymentMethodId }
+      {
+        payment_method: paymentMethodId,
+      }
     );
 
     const order = await Order.findOne({
       "payment.transactionId": paymentIntentId,
-    }).populate("products.product user");
+    }).populate([
+      { path: "user", select: "name email phone" },
+      { path: "products.product", select: "name perPrice" },
+    ]);
     const paymentRecord = await PaymentInfo.findOne({
       transactionId: paymentIntentId,
       userId,
@@ -158,20 +189,19 @@ export const confirmCheckoutPayment = catchAsync(async (req, res) => {
       );
     }
 
-    if (paymentIntent.status === "succeeded") {
-      // Update payment and order
+    if (confirmedPayment.status === "succeeded") {
       paymentRecord.paymentStatus = "complete";
-      paymentRecord.paymentMethod = paymentIntent.payment_method_types[0];
+      paymentRecord.paymentMethod = confirmedPayment.payment_method_types[0];
       await paymentRecord.save();
 
       order.payment.status = "paid";
-      order.status = "completed";
+      order.transactionId = paymentIntentId;
       await order.save();
 
       // Deduct stock
       for (let item of order.products) {
         await Product.findByIdAndUpdate(item.product._id, {
-          $inc: { remainingAmount: -item.quantity },
+          $inc: { remainingUnit: -item.quantity },
         });
       }
 
@@ -182,15 +212,15 @@ export const confirmCheckoutPayment = catchAsync(async (req, res) => {
         },
       });
 
-      // Clear cart on success
+      // Clear cart
       await Cart.findOneAndUpdate({ user: userId }, { items: [] });
 
-      sendResponse(res, {
+      return sendResponse(res, {
         statusCode: httpStatus.OK,
         success: true,
         message: "Checkout payment successful",
         data: {
-          orderId: order.orderId,
+          orderId: order._id,
           transactionId: paymentIntentId,
         },
       });
@@ -207,13 +237,21 @@ export const confirmCheckoutPayment = catchAsync(async (req, res) => {
 
 export const getOrders = catchAsync(async (req, res) => {
   const { page = 1, limit = 10, status } = req.query;
-  const filter = status ? { status } : {};
+  const userId = req.user._id;
+
+  const filter = { user: userId };
+  if (status) filter.status = status;
+
   const orders = await Order.paginate(filter, {
     page: parseInt(page),
     limit: parseInt(limit),
-    populate: ["user", "products.product"],
-    sort: { date: -1 },
+    sort: { createdAt: -1 },
+    populate: [
+      { path: "user", select: "name email phone" },
+      { path: "products.product", select: "name perPrice" },
+    ],
   });
+
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
@@ -224,11 +262,17 @@ export const getOrders = catchAsync(async (req, res) => {
 
 export const updateOrderStatus = catchAsync(async (req, res) => {
   const { status } = req.body;
+  if (!["ongoing", "completed", "delivered"].includes(status)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Invalid status");
+  }
   const order = await Order.findByIdAndUpdate(
     req.params.id,
     { status },
     { new: true }
-  ).populate("user products.product");
+  ).populate([
+    { path: "user", select: "name email phone" },
+    { path: "products.product", select: "name perPrice" },
+  ]);
   if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -250,10 +294,21 @@ export const deleteOrder = catchAsync(async (req, res) => {
 });
 
 export const getSingleOrder = catchAsync(async (req, res) => {
-  const order = await Order.findById(req.params.id).populate(
-    "user products.product"
-  );
-  if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  const userId = req.user._id;
+  const order = await Order.findById(req.params.id).populate([
+    { path: "user", select: "name email phone" },
+    { path: "products.product", select: "name perPrice" },
+  ]);
+
+  if (!order) {
+    throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+  }
+
+  // User should only access their own order
+  if (order.user._id.toString() !== userId.toString()) {
+    throw new AppError(httpStatus.FORBIDDEN, "Unauthorized access");
+  }
+
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
@@ -264,7 +319,13 @@ export const getSingleOrder = catchAsync(async (req, res) => {
 
 export const getOrdersByStatus = catchAsync(async (req, res) => {
   const { status } = req.params;
-  const orders = await Order.find({ status }).populate("user products.product");
+  if (!["ongoing", "completed", "delivered"].includes(status)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Invalid status");
+  }
+  const orders = await Order.find({ status }).populate([
+    { path: "user", select: "name email phone" },
+    { path: "products.product", select: "name perPrice" },
+  ]);
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
@@ -272,5 +333,3 @@ export const getOrdersByStatus = catchAsync(async (req, res) => {
     data: orders,
   });
 });
-
-// checkout with +/- and product details

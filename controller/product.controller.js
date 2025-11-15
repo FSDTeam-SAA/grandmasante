@@ -1,10 +1,10 @@
 import httpStatus from "http-status";
 import { Product } from "../model/product.model.js";
 import { uploadOnCloudinary } from "../utils/commonMethod.js";
+import cloudinary from "cloudinary";
 import AppError from "../errors/AppError.js";
 import sendResponse from "../utils/sendResponse.js";
 import catchAsync from "../utils/catchAsync.js";
-import { authorizeRole } from "./auth.controller.js";
 
 export const getProducts = catchAsync(async (req, res) => {
   const { page = 1, limit = 10 } = req.query;
@@ -27,10 +27,10 @@ export const getProducts = catchAsync(async (req, res) => {
 
 export const addProduct = catchAsync(async (req, res) => {
   const { name, totalUnit, unit = "pieces", perPrice } = req.body;
-  if (!name || !totalUnit || !perPrice) {
+  if (!name || !totalUnit || totalUnit <= 0 || !perPrice || perPrice <= 0) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Name, total amount, and price required"
+      "Name, positive totalUnit, and positive perPrice required"
     );
   }
   let image = {};
@@ -55,11 +55,24 @@ export const addProduct = catchAsync(async (req, res) => {
 });
 
 export const updateProduct = catchAsync(async (req, res) => {
-  const product = await Product.findByIdAndUpdate(req.params.id, req.body, {
-    new: true,
-  });
+  const { name, totalUnit, unit, perPrice } = req.body;
+  if (totalUnit && totalUnit <= 0) {
+    throw new AppError(httpStatus.BAD_REQUEST, "totalUnit must be positive");
+  }
+  if (perPrice && perPrice <= 0) {
+    throw new AppError(httpStatus.BAD_REQUEST, "perPrice must be positive");
+  }
+  const product = await Product.findByIdAndUpdate(
+    req.params.id,
+    { name, totalUnit, unit, perPrice },
+    { new: true }
+  );
   if (!product) throw new AppError(httpStatus.NOT_FOUND, "Product not found");
   if (req.file) {
+    // Delete old image if exists
+    if (product.image && product.image.public_id) {
+      await cloudinary.uploader.destroy(product.image.public_id);
+    }
     const result = await uploadOnCloudinary(req.file.buffer);
     product.image = { public_id: result.public_id, url: result.secure_url };
     await product.save();
@@ -73,8 +86,12 @@ export const updateProduct = catchAsync(async (req, res) => {
 });
 
 export const deleteProduct = catchAsync(async (req, res) => {
-  const product = await Product.findByIdAndDelete(req.params.id);
+  const product = await Product.findById(req.params.id);
   if (!product) throw new AppError(httpStatus.NOT_FOUND, "Product not found");
+  if (product.image && product.image.public_id) {
+    await cloudinary.uploader.destroy(product.image.public_id);
+  }
+  await Product.findByIdAndDelete(req.params.id);
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,

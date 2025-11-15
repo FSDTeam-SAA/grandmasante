@@ -1,6 +1,6 @@
-// models/user.model.js - Updated
 import mongoose, { Schema } from "mongoose";
 import bcrypt from "bcryptjs";
+import mongoosePaginate from "mongoose-paginate-v2";
 
 const userSchema = new Schema(
   {
@@ -29,10 +29,6 @@ const userSchema = new Schema(
       public_id: { type: String, default: "" },
       url: { type: String, default: "" },
     },
-    enableNotifications: { type: Boolean, default: true },
-    dnd: { type: Boolean, default: false },
-    lastPost: { type: Date },
-    totalPosts: { type: Number, default: 0 },
     address: {
       type: String,
     },
@@ -41,9 +37,7 @@ const userSchema = new Schema(
       token: { type: String, default: "" },
     },
     password_reset_token: { type: String, default: "" },
-    fine: { type: Number, default: 0 },
     refreshToken: { type: String, default: "" },
-    localTax: { type: String },
     review: [
       {
         rating: {
@@ -68,26 +62,6 @@ const userSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "UserSubscription",
       default: null,
-    },
-    savedItems: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: "Product",
-      },
-    ],
-    purchases: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: "Product",
-      },
-    ],
-    totalSavings: {
-      type: Number,
-      default: 0,
-    },
-    avgSavings: {
-      type: Number,
-      default: 0,
     },
   },
   { timestamps: true }
@@ -125,5 +99,7 @@ userSchema.statics.isPasswordMatched = async function (
 ) {
   return await bcrypt.compare(plainTextPassword, hashPassword);
 };
+
+userSchema.plugin(mongoosePaginate);
 
 export const User = mongoose.model("User", userSchema);

@@ -3,7 +3,7 @@ import mongoosePaginate from "mongoose-paginate-v2";
 
 const productSchema = new Schema(
   {
-    name: { type: StringNumber },
+    name: { type: String },
     image: {
       public_id: { type: String },
       url: { type: String },

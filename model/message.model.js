@@ -2,19 +2,24 @@ import mongoose from "mongoose";
 
 const messageSchema = new mongoose.Schema(
   {
-    chatId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Chat",
+    conversationId: {
+      type: String,
       required: true,
+      index: true,
     },
     sender: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
     },
+    receiver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
     content: {
       type: String,
-      required: true,
+      default: "",
     },
     contentType: {
       type: String,
@@ -23,21 +28,11 @@ const messageSchema = new mongoose.Schema(
     },
     fileUrl: [
       {
-        name: {
-          type: String,
-        },
-        content: {
-          type: String,
-        },
-        url: {
-          type: String,
-        },
+        name: String,
+        content: String,
+        url: String,
       },
     ],
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
   },
   { timestamps: true }
 );

@@ -25,7 +25,7 @@ export const manageCart = catchAsync(async (req, res) => {
       statusCode: httpStatus.OK,
       success: true,
       message: "Cart fetched successfully",
-      data,
+      data: { cart: data },
     });
   }
 
@@ -52,7 +52,6 @@ export const manageCart = catchAsync(async (req, res) => {
     );
     await cart.save();
     await cart.populate("items.product");
-
     return sendResponse(res, {
       statusCode: httpStatus.OK,
       success: true,
@@ -68,12 +67,11 @@ export const manageCart = catchAsync(async (req, res) => {
     if (itemIndex === -1) {
       throw new AppError(httpStatus.NOT_FOUND, "Item not in cart");
     }
-
     if (quantity === 0) {
       cart.items.splice(itemIndex, 1);
     } else {
       const product = await Product.findById(productId);
-      if (!product || product.remainingAmount < quantity) {
+      if (!product || product.remainingUnit < quantity) {
         throw new AppError(
           httpStatus.BAD_REQUEST,
           "Product not available or insufficient stock"
@@ -81,10 +79,8 @@ export const manageCart = catchAsync(async (req, res) => {
       }
       cart.items[itemIndex].quantity = quantity;
     }
-
     await cart.save();
     await cart.populate("items.product");
-
     return sendResponse(res, {
       statusCode: httpStatus.OK,
       success: true,
@@ -95,25 +91,25 @@ export const manageCart = catchAsync(async (req, res) => {
 
   if (action === "add") {
     const product = await Product.findById(productId);
-    if (!product || product.remainingUnit < quantity) {
-      throw new AppError(
-        httpStatus.BAD_REQUEST,
-        "Product not available or insufficient stock"
-      );
+    if (!product) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Product not available");
     }
-
     const existingItem = cart.items.find(
       (item) => item.product.toString() === productId
     );
-    if (existingItem) {
-      existingItem.quantity += quantity;
-    } else {
-      cart.items.push({ product: productId, quantity });
+    const newQuantity = existingItem
+      ? existingItem.quantity + quantity
+      : quantity;
+    if (product.remainingUnit < newQuantity) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Insufficient stock");
     }
-
+    if (existingItem) {
+      existingItem.quantity = newQuantity;
+    } else {
+      cart.items.push({ product: productId, quantity: newQuantity });
+    }
     await cart.save();
     await cart.populate("items.product");
-
     return sendResponse(res, {
       statusCode: httpStatus.OK,
       success: true,
@@ -125,6 +121,7 @@ export const manageCart = catchAsync(async (req, res) => {
   throw new AppError(httpStatus.BAD_REQUEST, "Invalid action");
 });
 
+// clearCart is redundant with manageCart action="clear"; consider deprecating this route
 export const clearCart = catchAsync(async (req, res) => {
   const userId = req.user._id;
   await Cart.findOneAndUpdate(
@@ -132,7 +129,6 @@ export const clearCart = catchAsync(async (req, res) => {
     { items: [] },
     { upsert: true, new: true }
   );
-
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
