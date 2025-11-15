@@ -6,10 +6,8 @@ import cookieParser from "cookie-parser";
 import router from "./mainroute/index.js";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import axios from "axios";
 import globalErrorHandler from "./middleware/globalErrorHandler.js";
 import notFound from "./middleware/notFound.js";
-import { fetchAndBroadcastRates } from "./utils/currencyService.js";
 
 const app = express();
 
@@ -60,38 +58,6 @@ io.on("connection", (socket) => {
     console.log("User disconnected:", socket.id);
   });
 });
-
-// const EXCHANGE_API_BASE = "https://api.frankfurter.dev/v1";
-
-// const fetchAndBroadcastRates = async () => {
-//   try {
-//     const response = await axios.get(`${EXCHANGE_API_BASE}/latest`, {
-//       params: {
-//         base: "USD",
-//         symbols: "EUR,GBP,JPY,AUD,DKK,NOK",
-//       },
-//     });
-//     const rates = response.data.rates;
-//     io.emit("currencyUpdate", {
-//       base: response.data.base,
-//       date: new Date(response.data.date),
-//       rates,
-//     });
-//   } catch (error) {
-//     console.error(
-//       "Currency fetch error:",
-//       error.response?.data || error.message
-//     );
-//   }
-// };
-
-// Initial fetch and interval
-// Initialize rates when server starts
-await fetchAndBroadcastRates(io);
-// Update rates every 5 minutes
-setInterval(async () => {
-  await fetchAndBroadcastRates(io);
-}, 2 * 60 * 1000);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, async () => {

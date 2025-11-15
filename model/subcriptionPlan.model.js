@@ -1,38 +1,14 @@
-import mongoose, { Schema } from "mongoose";
+import mongoose from "mongoose";
 
-const subscriptionPlanSchema = new Schema(
+const subscriptionPlanSchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      required: true,
-      unique: true,
-      enum: ["Basic", "Premium", "Extreme"],
-    },
-    priceMonthly: {
-      type: Number,
-      required: true,
-    },
-    priceYearly: {
-      type: Number,
-      required: true,
-    },
-    credits: {
-      type: Number,
-      required: true,
-    },
-    benefits: [
-      {
-        type: String,
-      },
-    ],
-    hasAds: {
-      type: Boolean,
-      default: false,
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
+    name: { type: String, required: true, unique: true },
+    description: { type: String, required: true },
+    price: { type: Number, required: true },
+    savePercentage: { type: String, default: "0%" },
+    userLimit: { type: String, default: "1 user" },
+    carryCredit: { type: Number, required: true },
+    isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

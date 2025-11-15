@@ -3,15 +3,15 @@ import mongoosePaginate from "mongoose-paginate-v2";
 
 const orderSchema = new Schema(
   {
-    orderId: { type: String, unique: true, required: true },
-    user: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    orderId: { type: String, unique: true },
+    user: { type: Schema.Types.ObjectId, ref: "User" },
     products: [
       {
         product: { type: Schema.Types.ObjectId, ref: "Product" },
         quantity: { type: Number, min: 1 },
       },
     ],
-    total: { type: Number, required: true },
+    total: { type: Number },
     status: {
       type: String,
       enum: ["ongoing", "completed", "delivered"],
