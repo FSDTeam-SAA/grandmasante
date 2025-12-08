@@ -8,23 +8,11 @@ import { sendEmail } from "../utils/sendEmail.js";
 import { User } from "./../model/user.model.js";
 
 export const register = catchAsync(async (req, res) => {
-  const {
-    name,
-    email,
-    phone,
-    password,
-    confirmPassword,
-    role = "user",
-  } = req.body;
+  const { name, email, password, role = "user" } = req.body;
   if (!email || !password) {
     throw new AppError(httpStatus.FORBIDDEN, "Please fill in all fields");
   }
-  if (password !== confirmPassword) {
-    throw new AppError(
-      httpStatus.FORBIDDEN,
-      "Password and confirm password do not match"
-    );
-  }
+
   const checkUser = await User.findOne({ email: email });
   if (checkUser)
     throw new AppError(
@@ -34,7 +22,6 @@ export const register = catchAsync(async (req, res) => {
   const user = await User.create({
     name,
     email,
-    phone,
     password,
     role,
     verificationInfo: { token: "", verified: true },
