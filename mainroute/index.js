@@ -9,6 +9,7 @@ import messageRoute from "../route/message.route.js";
 import productRoute from "../route/product.route.js";
 import cartRoute from "../route/cart.route.js";
 import orderRoute from "../route/order.route.js";
+import healthRoute from "../route/health.route.js";
 
 const router = express.Router();
 
@@ -22,5 +23,6 @@ router.use("/messages", messageRoute);
 router.use("/products", productRoute);
 router.use("/cart", cartRoute);
 router.use("/orders", orderRoute);
+router.use("/health", healthRoute);
 
 export default router;
