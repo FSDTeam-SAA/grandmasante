@@ -1,8 +1,10 @@
 import AppError from "../errors/AppError.js";
 import { Message } from "../model/message.model.js";
+import { io } from "../server.js";
 import catchAsync from "../utils/catchAsync.js";
 import { uploadOnCloudinary } from "../utils/commonMethod.js";
 import sendResponse from "../utils/sendResponse.js";
+import { getHealthSolution } from "./healthSoultion.controller.js";
 
 const getConversationId = (userA, userB) => {
   return [userA.toString(), userB.toString()].sort().join("_");
@@ -57,7 +59,7 @@ export const sendMessage = catchAsync(async (req, res, next) => {
     "name phone profileImage email"
   );
 
-  const io = getIO();
+  // const io = getHealthSolution();
 
   io.to(receiverId.toString()).emit("newMessage", {
     ...fullMessage.toObject(),
