@@ -65,8 +65,8 @@ JSON schema:
 }
 
 CONTENT RULES:
-- possibleConditions: 3–5 items max. confidence 0..1.
-- naturalRemedies: 3–6 items max.
+- possibleConditions: 5–8 items max. confidence 0..1.
+- naturalRemedies: 5–8 items max.
   - Every remedy MUST be feasible in ${country}.
   - Prefer everyday kitchen items and basic pharmacy items available locally.
   - Include dosage-style tags (e.g., "1–2 cups/day", "after meals", "before bed").
