@@ -51,16 +51,24 @@ export const updateProfile = catchAsync(async (req, res) => {
 
 export const getUsers = catchAsync(async (req, res) => {
   const { page = 1, limit = 10, role, status } = req.query;
-  const filter = {
-    role: { $in: role ? [role] : ["commercial", "in_house"] },
-    status,
-  };
+
+  const filter = {};
+
+  if (role) {
+    filter.role = role;
+  }
+
+  if (status) {
+    filter.status = status;
+  }
+
   const users = await User.paginate(filter, {
-    page: parseInt(page),
-    limit: parseInt(limit),
+    page: Number(page),
+    limit: Number(limit),
     select: "name email createdAt credit currentPlan status role",
     sort: { createdAt: -1 },
   });
+
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
@@ -68,6 +76,7 @@ export const getUsers = catchAsync(async (req, res) => {
     data: users,
   });
 });
+
 
 export const giveCredit = catchAsync(async (req, res) => {
   const { userId, credits } = req.body;
