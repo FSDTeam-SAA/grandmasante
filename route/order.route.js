@@ -13,7 +13,7 @@ import { protect } from "../middleware/auth.middleware.js";
 const router = express.Router();
 
 router.post("/checkout", protect, createPaymentForProduct); // Query: ?useCart=true|false; Body for direct products if false
-router.post("/confirm-checkout", protect, confirmCheckoutPayment);
+router.post("/confirm-checkout", protect, confirmCheckoutPayment); // Body: {transactionId|reference}
 
 // Order retrieval (authenticated)
 router.get("/", protect, getOrders);

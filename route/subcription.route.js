@@ -23,6 +23,6 @@ router.post("/plans/:id/toggle", protect, toggleSubscriptionPlan); // Body: {act
 
 // User subscription payment
 router.post("/create-payment", protect, createSubscriptionPayment); // Body: {planId}
-router.post("/confirm-payment", protect, confirmSubscriptionPayment); // Body: {paymentIntentId, paymentMethodId}
+router.post("/confirm-payment", protect, confirmSubscriptionPayment); // Body: {transactionId|reference}
 
 export default router;

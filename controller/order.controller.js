@@ -4,21 +4,45 @@ import { Product } from "../model/product.model.js";
 import { User } from "../model/user.model.js";
 import { Cart } from "../model/cart.model.js";
 import { PaymentInfo } from "../model/payment.model.js";
-import stripe from "stripe";
 import AppError from "../errors/AppError.js";
 import sendResponse from "../utils/sendResponse.js";
 import catchAsync from "../utils/catchAsync.js";
+import {
+  amountToMinorUnit,
+  createNotchPayPaymentLink,
+  getNotchPayStatus,
+  getNotchPayTransaction,
+  isNotchPayFailureStatus,
+  retrieveNotchPayPaymentByReferences,
+} from "../utils/notchpay.service.js";
 
-const stripeInstance = stripe(process.env.STRIPE_SECRET_KEY);
+const NOTCHPAY_CURRENCY = (
+  process.env.NOTCHPAY_CURRENCY || "XAF"
+).toUpperCase();
+
+const buildReference = (prefix, userId) => `${prefix}_${userId}_${Date.now()}`;
+
+const getPaymentCustomer = (user) => ({
+  name: user?.name || user?.username || "Customer",
+  email: user?.email,
+  phone: user?.phone,
+});
+
+const getCheckoutCallbackUrl = () =>
+  process.env.NOTCHPAY_PRODUCT_CALLBACK_URL ||
+  process.env.NOTCHPAY_CALLBACK_URL ||
+  process.env.CLIENT_URL;
 
 export const createPaymentForProduct = catchAsync(async (req, res) => {
-  const { useCart = true } = req.query;
+  const useCart = req.query.useCart !== "false";
   const userId = req.user._id;
   const user = await User.findById(userId);
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+
   let products = [];
   let total = 0;
 
-  if (useCart === "true") {
+  if (useCart) {
     const cart = await Cart.findOne({ user: userId }).populate("items.product");
     if (!cart || cart.items.length === 0) {
       throw new AppError(httpStatus.BAD_REQUEST, "Cart is empty");
@@ -45,50 +69,48 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
     if (!item.productId || !item.quantity || item.quantity < 1) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        "Invalid productId or quantity in items"
+        "Invalid productId or quantity in items",
       );
     }
     const product = await Product.findById(item.productId);
     if (!product) {
       throw new AppError(
         httpStatus.NOT_FOUND,
-        `Product ${item.productId} not found`
+        `Product ${item.productId} not found`,
       );
     }
     if (product.remainingUnit < item.quantity) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Insufficient stock for ${product.name}`
+        `Insufficient stock for ${product.name}`,
       );
     }
     total += product.perPrice * item.quantity;
   }
 
-  // Create or reuse Stripe customer
-  let customer;
-  const existingCustomers = await stripeInstance.customers.list({
-    email: user.email,
-  });
-  customer = existingCustomers.data[0];
-  if (!customer) {
-    customer = await stripeInstance.customers.create({
-      email: user.email,
-      metadata: { userId: userId.toString() },
-    });
-  }
+  const transactionReference = buildReference("ord", userId.toString());
+  const amountInMinorUnit = amountToMinorUnit(total, NOTCHPAY_CURRENCY);
 
-  const paymentIntent = await stripeInstance.paymentIntents.create({
-    amount: Math.round(total * 100),
-    currency: "usd",
-    customer: customer.id,
-    automatic_payment_methods: { enabled: true, allow_redirects: "never" },
-    metadata: {
-      userId: userId.toString(),
-      type: "product",
-      products: JSON.stringify(products),
-      total,
-    },
-  });
+  let notchPayPayment;
+  try {
+    notchPayPayment = await createNotchPayPaymentLink({
+      amount: amountInMinorUnit,
+      currency: NOTCHPAY_CURRENCY,
+      reference: transactionReference,
+      callback: getCheckoutCallbackUrl(),
+      description: `Checkout payment for order by ${user.email}`,
+      customer: getPaymentCustomer(user),
+      metadata: {
+        type: "product",
+        userId: userId.toString(),
+      },
+    });
+  } catch (error) {
+    throw new AppError(
+      error?.statusCode || httpStatus.BAD_GATEWAY,
+      error?.message || "Failed to create NotchPay payment link",
+    );
+  }
 
   // Create order
   const order = new Order({
@@ -99,9 +121,11 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
     })),
     status: "ongoing",
     total,
-    payment: { transactionId: paymentIntent.id, status: "pending" },
+    payment: { transactionId: transactionReference, status: "pending" },
   });
   await order.save();
+
+  const transaction = getNotchPayTransaction(notchPayPayment.response);
 
   // Save payment record
   const paymentRecord = new PaymentInfo({
@@ -109,8 +133,11 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
     planId: null,
     price: total,
     finalPrice: total,
-    transactionId: paymentIntent.id,
+    transactionId: transactionReference,
+    providerTransactionId: transaction?.id || null,
+    gatewayReference: transaction?.reference || transaction?.id || null,
     paymentStatus: "pending",
+    paymentMethod: "notchpay",
     type: "product",
   });
   await paymentRecord.save();
@@ -118,121 +145,180 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
-    message: "Checkout created, proceed to payment",
+    message: "Checkout payment link created",
     data: {
       orderId: order._id,
-      transactionId: paymentIntent.id,
-      clientSecret: paymentIntent.client_secret,
+      transactionId: transactionReference,
+      reference: transactionReference,
+      paymentLink: notchPayPayment.authorizationUrl,
+      currency: NOTCHPAY_CURRENCY,
+      amountInMinorUnit,
+      providerTransactionId: transaction?.id || transaction?.reference || null,
+      status: getNotchPayStatus(notchPayPayment.response),
       total,
-      customerId: customer.id,
       products,
     },
   });
 });
 
 export const confirmCheckoutPayment = catchAsync(async (req, res) => {
-  const { paymentIntentId, paymentMethodId } = req.body;
+  const {
+    transactionId,
+    reference,
+    paymentIntentId, // Backward compatibility
+    trxref,
+    notchpay_trxref,
+  } = req.body;
   const userId = req.user._id;
-  if (!paymentIntentId || !paymentMethodId) {
+  const localReferenceCandidates = [
+    transactionId,
+    paymentIntentId,
+    trxref,
+    notchpay_trxref,
+    reference,
+  ].filter(Boolean);
+
+  if (!localReferenceCandidates.length) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Both paymentIntentId and paymentMethodId are required"
+      "Transaction reference is required",
     );
   }
 
-  try {
-    // Fetch PaymentIntent status from Stripe
-    const paymentIntent = await stripeInstance.paymentIntents.retrieve(
-      paymentIntentId
-    );
+  let paymentRecord = await PaymentInfo.findOne({
+    userId,
+    type: "product",
+    transactionId: { $in: localReferenceCandidates },
+  });
 
-    // Handle already succeeded PaymentIntent gracefully
-    if (paymentIntent.status === "succeeded") {
-      const order = await Order.findOne({
-        "payment.transactionId": paymentIntentId,
-      });
-      return sendResponse(res, {
-        statusCode: httpStatus.OK,
-        success: true,
-        message: "Payment has already been completed",
-        data: {
-          orderId: order?._id,
-          transactionId: paymentIntent.id,
-        },
-      });
-    }
-
-    // Confirm payment
-    const confirmedPayment = await stripeInstance.paymentIntents.confirm(
-      paymentIntentId,
-      {
-        payment_method: paymentMethodId,
-      }
-    );
-
-    const order = await Order.findOne({
-      "payment.transactionId": paymentIntentId,
-    }).populate([
-      { path: "user", select: "name email phone" },
-      { path: "products.product", select: "name perPrice" },
-    ]);
-    const paymentRecord = await PaymentInfo.findOne({
-      transactionId: paymentIntentId,
+  if (!paymentRecord && reference) {
+    paymentRecord = await PaymentInfo.findOne({
       userId,
       type: "product",
+      gatewayReference: reference,
+    });
+  }
+
+  if (!paymentRecord) {
+    throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  }
+
+  const localTransactionReference = paymentRecord.transactionId;
+
+  const order = await Order.findOne({
+    "payment.transactionId": localTransactionReference,
+  }).populate([
+    { path: "user", select: "name email phone" },
+    { path: "products.product", select: "name perPrice" },
+  ]);
+
+  if (!order || !paymentRecord) {
+    throw new AppError(
+      httpStatus.NOT_FOUND,
+      "Order or payment record not found",
+    );
+  }
+
+  if (
+    order.payment?.status === "paid" ||
+    paymentRecord.paymentStatus === "complete"
+  ) {
+    return sendResponse(res, {
+      statusCode: httpStatus.OK,
+      success: true,
+      message: "Payment has already been completed",
+      data: {
+        orderId: order._id,
+        transactionId: localTransactionReference,
+      },
+    });
+  }
+
+  let notchPayResult;
+  try {
+    notchPayResult = await retrieveNotchPayPaymentByReferences([
+      reference,
+      paymentRecord.gatewayReference,
+      paymentRecord.providerTransactionId,
+      transactionId,
+      paymentIntentId,
+      trxref,
+      notchpay_trxref,
+      localTransactionReference,
+    ]);
+  } catch (error) {
+    throw new AppError(
+      error?.statusCode || httpStatus.BAD_GATEWAY,
+      error?.message || "Failed to verify payment with NotchPay",
+    );
+  }
+  const notchPayResponse = notchPayResult.response;
+  const paymentStatus = String(
+    getNotchPayStatus(notchPayResponse) || "",
+  ).toLowerCase();
+  const transaction = getNotchPayTransaction(notchPayResponse);
+
+  if (paymentStatus === "complete") {
+    paymentRecord.paymentStatus = "complete";
+    paymentRecord.paymentMethod =
+      transaction?.payment_method || transaction?.channel || "notchpay";
+    paymentRecord.providerTransactionId =
+      transaction?.id || paymentRecord.providerTransactionId || null;
+    paymentRecord.gatewayReference =
+      transaction?.reference ||
+      notchPayResult.matchedReference ||
+      paymentRecord.gatewayReference ||
+      null;
+    await paymentRecord.save();
+
+    order.payment.status = "paid";
+    order.payment.transactionId = localTransactionReference;
+    await order.save();
+
+    // Deduct stock once after successful payment confirmation
+    for (let item of order.products) {
+      await Product.findByIdAndUpdate(item.product._id, {
+        $inc: { remainingUnit: -item.quantity },
+      });
+    }
+
+    // Add to user purchases
+    await User.findByIdAndUpdate(userId, {
+      $addToSet: {
+        purchases: { $each: order.products.map((p) => p.product._id) },
+      },
     });
 
-    if (!order || !paymentRecord) {
-      throw new AppError(
-        httpStatus.NOT_FOUND,
-        "Order or payment record not found"
-      );
-    }
+    // Clear cart
+    await Cart.findOneAndUpdate({ user: userId }, { items: [] });
 
-    if (confirmedPayment.status === "succeeded") {
-      paymentRecord.paymentStatus = "complete";
-      paymentRecord.paymentMethod = confirmedPayment.payment_method_types[0];
-      await paymentRecord.save();
-
-      order.payment.status = "paid";
-      order.transactionId = paymentIntentId;
-      await order.save();
-
-      // Deduct stock
-      for (let item of order.products) {
-        await Product.findByIdAndUpdate(item.product._id, {
-          $inc: { remainingUnit: -item.quantity },
-        });
-      }
-
-      // Add to user purchases
-      await User.findByIdAndUpdate(userId, {
-        $addToSet: {
-          purchases: { $each: order.products.map((p) => p.product._id) },
-        },
-      });
-
-      // Clear cart
-      await Cart.findOneAndUpdate({ user: userId }, { items: [] });
-
-      return sendResponse(res, {
-        statusCode: httpStatus.OK,
-        success: true,
-        message: "Checkout payment successful",
-        data: {
-          orderId: order._id,
-          transactionId: paymentIntentId,
-        },
-      });
-    } else {
-      paymentRecord.paymentStatus = "failed";
-      await paymentRecord.save();
-      throw new AppError(httpStatus.BAD_REQUEST, "Payment failed");
-    }
-  } catch (error) {
-    console.error("Stripe confirm error:", error);
-    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, error.message);
+    return sendResponse(res, {
+      statusCode: httpStatus.OK,
+      success: true,
+      message: "Checkout payment successful",
+      data: {
+        orderId: order._id,
+        transactionId: localTransactionReference,
+      },
+    });
   }
+
+  if (isNotchPayFailureStatus(paymentStatus)) {
+    paymentRecord.paymentStatus = "failed";
+    await paymentRecord.save();
+    throw new AppError(httpStatus.BAD_REQUEST, "Payment failed");
+  }
+
+  sendResponse(res, {
+    statusCode: httpStatus.ACCEPTED,
+    success: true,
+    message: "Payment is not completed yet",
+    data: {
+      orderId: order._id,
+      transactionId: localTransactionReference,
+      status: paymentStatus || "pending",
+    },
+  });
 });
 
 export const getOrders = catchAsync(async (req, res) => {
@@ -268,7 +354,7 @@ export const updateOrderStatus = catchAsync(async (req, res) => {
   const order = await Order.findByIdAndUpdate(
     req.params.id,
     { status },
-    { new: true }
+    { new: true },
   ).populate([
     { path: "user", select: "name email phone" },
     { path: "products.product", select: "name perPrice" },

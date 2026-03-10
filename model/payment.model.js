@@ -23,6 +23,12 @@ const paymentInfoSchema = new Schema(
     transactionId: {
       type: String,
     },
+    providerTransactionId: {
+      type: String,
+    },
+    gatewayReference: {
+      type: String,
+    },
     paymentStatus: {
       type: String,
       enum: ["pending", "complete", "failed"],

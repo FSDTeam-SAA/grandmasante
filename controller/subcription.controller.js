@@ -7,10 +7,31 @@ import { io } from "../server.js";
 import AppError from "../errors/AppError.js";
 import sendResponse from "../utils/sendResponse.js";
 import catchAsync from "../utils/catchAsync.js";
-import stripe from "stripe";
 import { PaymentInfo } from "../model/payment.model.js";
+import {
+  amountToMinorUnit,
+  createNotchPayPaymentLink,
+  getNotchPayStatus,
+  getNotchPayTransaction,
+  isNotchPayFailureStatus,
+  retrieveNotchPayPaymentByReferences,
+} from "../utils/notchpay.service.js";
 
-const stripeInstance = stripe(process.env.STRIPE_SECRET_KEY);
+const NOTCHPAY_CURRENCY = (process.env.NOTCHPAY_CURRENCY || "XAF").toUpperCase();
+
+const buildReference = (prefix, userId) =>
+  `${prefix}_${userId}_${Date.now()}`;
+
+const getPaymentCustomer = (user) => ({
+  name: user?.name || user?.username || "Customer",
+  email: user?.email,
+  phone: user?.phone,
+});
+
+const getSubscriptionCallbackUrl = () =>
+  process.env.NOTCHPAY_SUBSCRIPTION_CALLBACK_URL ||
+  process.env.NOTCHPAY_CALLBACK_URL ||
+  process.env.CLIENT_URL;
 
 // Get all active plans
 export const getSubscriptionPlans = catchAsync(async (req, res) => {
@@ -25,7 +46,7 @@ export const getSubscriptionPlans = catchAsync(async (req, res) => {
   });
 });
 
-// Create Stripe Payment Intent for subscription
+// Create NotchPay payment link for subscription
 export const createSubscriptionPayment = catchAsync(async (req, res) => {
   const { planId } = req.body;
   if (!planId)
@@ -33,6 +54,9 @@ export const createSubscriptionPayment = catchAsync(async (req, res) => {
 
   const userId = req.user._id;
   const user = await User.findById(userId);
+  if (!user)
+    throw new AppError(httpStatus.NOT_FOUND, "User not found");
+
   const plan = await SubscriptionPlan.findById(planId);
   if (!plan) throw new AppError(httpStatus.NOT_FOUND, "Plan not found");
 
@@ -48,33 +72,32 @@ export const createSubscriptionPayment = catchAsync(async (req, res) => {
     );
   }
 
-  // Stripe customer
-  let customer;
+  const transactionReference = buildReference("sub", userId.toString());
+  const amountInMinorUnit = amountToMinorUnit(plan.price, NOTCHPAY_CURRENCY);
+
+  let notchPayPayment;
   try {
-    customer = await stripeInstance.customers.create({
-      email: user.email,
-      metadata: { userId: userId.toString() },
+    notchPayPayment = await createNotchPayPaymentLink({
+      amount: amountInMinorUnit,
+      currency: NOTCHPAY_CURRENCY,
+      reference: transactionReference,
+      callback: getSubscriptionCallbackUrl(),
+      description: `Subscription payment for ${plan.name}`,
+      customer: getPaymentCustomer(user),
+      metadata: {
+        type: "subscription",
+        userId: userId.toString(),
+        planId: plan._id.toString(),
+      },
     });
   } catch (error) {
-    const customers = await stripeInstance.customers.list({
-      email: user.email,
-    });
-    customer = customers.data[0];
-    if (!customer)
-      throw new AppError(
-        httpStatus.INTERNAL_SERVER_ERROR,
-        "Stripe customer error"
-      );
+    throw new AppError(
+      error?.statusCode || httpStatus.BAD_GATEWAY,
+      error?.message || "Failed to create NotchPay payment link"
+    );
   }
 
-  // Payment Intent
-  const paymentIntent = await stripeInstance.paymentIntents.create({
-    amount: Math.round(plan.price * 100),
-    currency: "usd",
-    customer: customer.id,
-    automatic_payment_methods: { enabled: true, allow_redirects: "never" },
-    metadata: { userId: userId.toString(), planId: plan._id.toString() },
-  });
+  const transaction = getNotchPayTransaction(notchPayPayment.response);
 
   // Save payment record
   const subscriptionPayment = await PaymentInfo.create({
@@ -82,103 +105,209 @@ export const createSubscriptionPayment = catchAsync(async (req, res) => {
     planId,
     price: plan.price,
     finalPrice: plan.price,
-    transactionId: paymentIntent.id,
+    transactionId: transactionReference,
+    providerTransactionId: transaction?.id || null,
+    gatewayReference: transaction?.reference || transaction?.id || null,
     paymentStatus: "pending",
+    paymentMethod: "notchpay",
     type: "subscription",
   });
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
-    message: "Subscription payment intent created",
+    message: "Subscription payment link created",
     data: {
-      transactionId: paymentIntent.id,
-      clientSecret: paymentIntent.client_secret,
+      transactionId: transactionReference,
+      reference: transactionReference,
+      paymentLink: notchPayPayment.authorizationUrl,
+      currency: NOTCHPAY_CURRENCY,
+      amountInMinorUnit,
       finalPrice: plan.price,
-      customerId: customer.id,
+      status: getNotchPayStatus(notchPayPayment.response),
+      providerTransactionId: transaction?.id || transaction?.reference || null,
+      paymentId: subscriptionPayment._id,
     },
   });
 });
 
-// Confirm Stripe Payment & activate subscription
+// Confirm NotchPay payment and activate subscription
 export const confirmSubscriptionPayment = catchAsync(async (req, res) => {
-  const { paymentIntentId, paymentMethodId } = req.body;
+  const {
+    transactionId,
+    reference,
+    paymentIntentId, // Backward compatibility
+    trxref,
+    notchpay_trxref,
+  } = req.body;
   const userId = req.user._id;
-  if (!paymentIntentId || !paymentMethodId)
+  const localReferenceCandidates = [
+    transactionId,
+    paymentIntentId,
+    trxref,
+    notchpay_trxref,
+    reference,
+  ].filter(Boolean);
+
+  if (!localReferenceCandidates.length)
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "PaymentIntentId and PaymentMethodId required"
+      "Transaction reference is required"
     );
 
-  try {
-    const paymentIntent = await stripeInstance.paymentIntents.confirm(
-      paymentIntentId,
-      {
-        payment_method: paymentMethodId,
-      }
-    );
+  let subscriptionPayment = await PaymentInfo.findOne({
+    userId,
+    type: "subscription",
+    transactionId: { $in: localReferenceCandidates },
+  }).populate("planId");
 
-    const subscriptionPayment = await PaymentInfo.findOne({
-      transactionId: paymentIntentId,
+  if (!subscriptionPayment && reference) {
+    subscriptionPayment = await PaymentInfo.findOne({
       userId,
       type: "subscription",
+      gatewayReference: reference,
     }).populate("planId");
+  }
 
-    if (!subscriptionPayment)
-      throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
+  if (!subscriptionPayment)
+    throw new AppError(httpStatus.NOT_FOUND, "Payment record not found");
 
-    if (paymentIntent.status !== "succeeded") {
-      subscriptionPayment.paymentStatus = "failed";
-      await subscriptionPayment.save();
-      throw new AppError(httpStatus.BAD_REQUEST, "Payment failed");
-    }
+  const localTransactionReference = subscriptionPayment.transactionId;
 
-    subscriptionPayment.paymentStatus = "complete";
-    subscriptionPayment.paymentMethod = paymentIntent.payment_method_types[0];
-    await subscriptionPayment.save();
+  if (!subscriptionPayment.planId) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Related subscription plan does not exist"
+    );
+  }
 
-    // Activate subscription
-    const userSub = await UserSubscription.create({
+  if (subscriptionPayment.paymentStatus === "complete") {
+    const existingUserSub = await UserSubscription.findOne({
       user: userId,
       plan: subscriptionPayment.planId._id,
-      creditsRemaining: subscriptionPayment.planId.carryCredit,
       status: "active",
-      paymentMethod: "stripe",
-      stripeTransactionId: paymentIntentId,
     });
 
-    // Update user plan
-    await User.findByIdAndUpdate(userId, {
-      currentPlan: subscriptionPayment.planId.name,
-      subscription: userSub._id,
-      credit: subscriptionPayment.planId.carryCredit,
+    return sendResponse(res, {
+      statusCode: httpStatus.OK,
+      success: true,
+      message: "Subscription payment is already confirmed",
+      data: {
+        transactionId: localTransactionReference,
+        planId: subscriptionPayment.planId._id,
+        userSubId: existingUserSub?._id || null,
+        creditsRemaining:
+          existingUserSub?.creditsRemaining || subscriptionPayment.planId.carryCredit,
+      },
     });
+  }
 
-    // Notification
-    const newNotif = await Notification.create({
+  let notchPayResult;
+  try {
+    notchPayResult = await retrieveNotchPayPaymentByReferences([
+      reference,
+      subscriptionPayment.gatewayReference,
+      subscriptionPayment.providerTransactionId,
+      transactionId,
+      paymentIntentId,
+      trxref,
+      notchpay_trxref,
+      localTransactionReference,
+    ]);
+  } catch (error) {
+    throw new AppError(
+      error?.statusCode || httpStatus.BAD_GATEWAY,
+      error?.message || "Failed to verify payment with NotchPay"
+    );
+  }
+  const notchPayResponse = notchPayResult.response;
+  const paymentStatus = String(getNotchPayStatus(notchPayResponse) || "").toLowerCase();
+  const transaction = getNotchPayTransaction(notchPayResponse);
+
+  if (paymentStatus === "complete") {
+    subscriptionPayment.paymentStatus = "complete";
+    subscriptionPayment.paymentMethod =
+      transaction?.payment_method || transaction?.channel || "notchpay";
+    subscriptionPayment.providerTransactionId =
+      transaction?.id || subscriptionPayment.providerTransactionId || null;
+    subscriptionPayment.gatewayReference =
+      transaction?.reference ||
+      notchPayResult.matchedReference ||
+      subscriptionPayment.gatewayReference ||
+      null;
+    await subscriptionPayment.save();
+
+    let userSub = await UserSubscription.findOne({
       user: userId,
-      title: "Subscription Purchased",
-      message: `Your ${subscriptionPayment.planId.name} subscription is active with ${subscriptionPayment.planId.carryCredit} credits.`,
-      type: "subscription",
+      plan: subscriptionPayment.planId._id,
+      status: "active",
     });
 
-    io.emit("notification", newNotif);
+    if (!userSub) {
+      userSub = await UserSubscription.create({
+        user: userId,
+        plan: subscriptionPayment.planId._id,
+        creditsRemaining: subscriptionPayment.planId.carryCredit,
+        status: "active",
+        paymentMethod: "notchpay",
+        stripeTransactionId: null,
+        notchpayTransactionId:
+          transaction?.id ||
+          transaction?.reference ||
+          notchPayResult.matchedReference ||
+          localTransactionReference,
+        gatewayTransactionId:
+          transaction?.id ||
+          transaction?.reference ||
+          notchPayResult.matchedReference ||
+          localTransactionReference,
+      });
+
+      await User.findByIdAndUpdate(userId, {
+        currentPlan: subscriptionPayment.planId.name,
+        subscription: userSub._id,
+        credit: subscriptionPayment.planId.carryCredit,
+      });
+
+      const newNotif = await Notification.create({
+        user: userId,
+        title: "Subscription Purchased",
+        message: `Your ${subscriptionPayment.planId.name} subscription is active with ${subscriptionPayment.planId.carryCredit} credits.`,
+        type: "subscription",
+      });
+
+      io.emit("notification", newNotif);
+    }
 
     sendResponse(res, {
       statusCode: httpStatus.OK,
       success: true,
       message: "Subscription activated successfully",
       data: {
-        transactionId: paymentIntentId,
+        transactionId: localTransactionReference,
         planId: subscriptionPayment.planId._id,
         userSubId: userSub._id,
         creditsRemaining: userSub.creditsRemaining,
       },
     });
-  } catch (error) {
-    console.error(error);
-    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, error.message);
+    return;
   }
+
+  if (isNotchPayFailureStatus(paymentStatus)) {
+    subscriptionPayment.paymentStatus = "failed";
+    await subscriptionPayment.save();
+    throw new AppError(httpStatus.BAD_REQUEST, "Payment failed");
+  }
+
+  sendResponse(res, {
+    statusCode: httpStatus.ACCEPTED,
+    success: true,
+    message: "Payment is not completed yet",
+    data: {
+      transactionId: localTransactionReference,
+      status: paymentStatus || "pending",
+    },
+  });
 });
 
 // Get all plans (admin)
