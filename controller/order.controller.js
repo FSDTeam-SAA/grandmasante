@@ -15,10 +15,14 @@ import {
   isNotchPayFailureStatus,
   retrieveNotchPayPaymentByReferences,
 } from "../utils/notchpay.service.js";
-
-const NOTCHPAY_CURRENCY = (
-  process.env.NOTCHPAY_CURRENCY || "XAF"
-).toUpperCase();
+import {
+  buildTreatmentPricing,
+  CURRENCY_DISPLAY,
+  DELIVERY_COUNTRY,
+  isCameroonCountry,
+  normalizeCountry,
+  NOTCHPAY_CURRENCY,
+} from "../utils/pricing.js";
 
 const buildReference = (prefix, userId) => `${prefix}_${userId}_${Date.now()}`;
 
@@ -33,14 +37,86 @@ const getCheckoutCallbackUrl = () =>
   process.env.NOTCHPAY_CALLBACK_URL ||
   process.env.CLIENT_URL;
 
+const buildPricingPayload = (source = {}) => ({
+  subtotal: source.subtotal ?? source.price ?? 0,
+  consultationFee: source.consultationFee ?? 0,
+  grandmaSanteInteractFee: source.grandmaSanteInteractFee ?? 0,
+  total: source.total ?? source.finalPrice ?? 0,
+  currency: source.currency || NOTCHPAY_CURRENCY,
+  currencyDisplay: CURRENCY_DISPLAY,
+});
+
+const normalizeDeliveryCoordinates = (coordinates = {}) => {
+  const latitude = Number(coordinates.latitude);
+  const longitude = Number(coordinates.longitude);
+
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "deliveryCoordinates.latitude must be a valid latitude",
+    );
+  }
+
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "deliveryCoordinates.longitude must be a valid longitude",
+    );
+  }
+
+  return { latitude, longitude };
+};
+
+const serializeOrder = (order) => {
+  const plainOrder = order?.toObject ? order.toObject() : order;
+  if (!plainOrder) return plainOrder;
+
+  return {
+    ...plainOrder,
+    pricing: buildPricingPayload({
+      subtotal: plainOrder.subtotal,
+      consultationFee: plainOrder.consultationFee,
+      grandmaSanteInteractFee: plainOrder.grandmaSanteInteractFee,
+      total: plainOrder.total,
+      currency: plainOrder.currency,
+    }),
+    currencyDisplay: CURRENCY_DISPLAY,
+  };
+};
+
 export const createPaymentForProduct = catchAsync(async (req, res) => {
   const useCart = req.query.useCart !== "false";
   const userId = req.user._id;
   const user = await User.findById(userId);
   if (!user) throw new AppError(httpStatus.NOT_FOUND, "User not found");
+  const deliveryCountry = normalizeCountry(
+    req.body.deliveryCountry || req.body.country || user.country,
+  );
+  const deliveryCoordinates = normalizeDeliveryCoordinates(
+    req.body.deliveryCoordinates,
+  );
+
+  if (!deliveryCountry) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Country is required for treatment checkout",
+    );
+  }
+
+  if (!isCameroonCountry(deliveryCountry)) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      `Treatment delivery is currently available only in ${DELIVERY_COUNTRY}`,
+    );
+  }
+
+  if (deliveryCountry !== user.country) {
+    user.country = deliveryCountry;
+    await user.save();
+  }
 
   let products = [];
-  let total = 0;
+  let subtotal = 0;
 
   if (useCart) {
     const cart = await Cart.findOne({ user: userId }).populate("items.product");
@@ -64,7 +140,7 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
     products = directProducts;
   }
 
-  // Validate stock and calculate total
+  // Validate stock and calculate subtotal
   for (let item of products) {
     if (!item.productId || !item.quantity || item.quantity < 1) {
       throw new AppError(
@@ -85,11 +161,19 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
         `Insufficient stock for ${product.name}`,
       );
     }
-    total += product.perPrice * item.quantity;
+    subtotal += product.perPrice * item.quantity;
   }
 
+  const pricing = buildTreatmentPricing({
+    subtotal,
+    country: deliveryCountry,
+  });
+
   const transactionReference = buildReference("ord", userId.toString());
-  const amountInMinorUnit = amountToMinorUnit(total, NOTCHPAY_CURRENCY);
+  const amountInMinorUnit = amountToMinorUnit(
+    pricing.total,
+    NOTCHPAY_CURRENCY,
+  );
 
   let notchPayPayment;
   try {
@@ -119,8 +203,14 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
       product: p.productId,
       quantity: p.quantity,
     })),
+    subtotal: pricing.subtotal,
+    consultationFee: pricing.consultationFee,
+    grandmaSanteInteractFee: pricing.grandmaSanteInteractFee,
     status: "ongoing",
-    total,
+    total: pricing.total,
+    currency: pricing.currency,
+    deliveryCountry,
+    deliveryCoordinates,
     payment: { transactionId: transactionReference, status: "pending" },
   });
   await order.save();
@@ -131,8 +221,11 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
   const paymentRecord = new PaymentInfo({
     userId,
     planId: null,
-    price: total,
-    finalPrice: total,
+    price: pricing.subtotal,
+    finalPrice: pricing.total,
+    consultationFee: pricing.consultationFee,
+    grandmaSanteInteractFee: pricing.grandmaSanteInteractFee,
+    currency: pricing.currency,
     transactionId: transactionReference,
     providerTransactionId: transaction?.id || null,
     gatewayReference: transaction?.reference || transaction?.id || null,
@@ -152,10 +245,17 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
       reference: transactionReference,
       paymentLink: notchPayPayment.authorizationUrl,
       currency: NOTCHPAY_CURRENCY,
+      currencyDisplay: CURRENCY_DISPLAY,
       amountInMinorUnit,
       providerTransactionId: transaction?.id || transaction?.reference || null,
       status: getNotchPayStatus(notchPayPayment.response),
-      total,
+      subtotal: pricing.subtotal,
+      consultationFee: pricing.consultationFee,
+      grandmaSanteInteractFee: pricing.grandmaSanteInteractFee,
+      total: pricing.total,
+      pricing,
+      deliveryCountry,
+      deliveryCoordinates,
       products,
     },
   });
@@ -230,6 +330,15 @@ export const confirmCheckoutPayment = catchAsync(async (req, res) => {
       data: {
         orderId: order._id,
         transactionId: localTransactionReference,
+        pricing: buildPricingPayload({
+          subtotal: order.subtotal,
+          consultationFee: order.consultationFee,
+          grandmaSanteInteractFee: order.grandmaSanteInteractFee,
+          total: order.total,
+          currency: order.currency,
+        }),
+        deliveryCountry: order.deliveryCountry || null,
+        deliveryCoordinates: order.deliveryCoordinates || null,
       },
     });
   }
@@ -299,6 +408,15 @@ export const confirmCheckoutPayment = catchAsync(async (req, res) => {
       data: {
         orderId: order._id,
         transactionId: localTransactionReference,
+        pricing: buildPricingPayload({
+          subtotal: order.subtotal,
+          consultationFee: order.consultationFee,
+          grandmaSanteInteractFee: order.grandmaSanteInteractFee,
+          total: order.total,
+          currency: order.currency,
+        }),
+        deliveryCountry: order.deliveryCountry || null,
+        deliveryCoordinates: order.deliveryCoordinates || null,
       },
     });
   }
@@ -317,6 +435,15 @@ export const confirmCheckoutPayment = catchAsync(async (req, res) => {
       orderId: order._id,
       transactionId: localTransactionReference,
       status: paymentStatus || "pending",
+      pricing: buildPricingPayload({
+        subtotal: order.subtotal,
+        consultationFee: order.consultationFee,
+        grandmaSanteInteractFee: order.grandmaSanteInteractFee,
+        total: order.total,
+        currency: order.currency,
+      }),
+      deliveryCountry: order.deliveryCountry || null,
+      deliveryCoordinates: order.deliveryCoordinates || null,
     },
   });
 });
@@ -337,6 +464,8 @@ export const getOrders = catchAsync(async (req, res) => {
       { path: "products.product", select: "name perPrice" },
     ],
   });
+
+  orders.docs = orders.docs.map((order) => serializeOrder(order));
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -364,7 +493,7 @@ export const updateOrderStatus = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Order status updated",
-    data: order,
+    data: serializeOrder(order),
   });
 });
 
@@ -375,7 +504,7 @@ export const deleteOrder = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Order deleted successfully",
-    data: order,
+    data: serializeOrder(order),
   });
 });
 
@@ -399,7 +528,7 @@ export const getSingleOrder = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Order fetched successfully",
-    data: order,
+    data: serializeOrder(order),
   });
 });
 
@@ -416,6 +545,6 @@ export const getOrdersByStatus = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Orders fetched successfully",
-    data: orders,
+    data: orders.map((order) => serializeOrder(order)),
   });
 });

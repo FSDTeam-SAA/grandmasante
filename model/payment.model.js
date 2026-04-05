@@ -20,6 +20,18 @@ const paymentInfoSchema = new Schema(
     finalPrice: {
       type: Number,
     },
+    consultationFee: {
+      type: Number,
+      default: 0,
+    },
+    grandmaSanteInteractFee: {
+      type: Number,
+      default: 0,
+    },
+    currency: {
+      type: String,
+      default: "XAF",
+    },
     transactionId: {
       type: String,
     },

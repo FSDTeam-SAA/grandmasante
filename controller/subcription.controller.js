@@ -16,8 +16,10 @@ import {
   isNotchPayFailureStatus,
   retrieveNotchPayPaymentByReferences,
 } from "../utils/notchpay.service.js";
-
-const NOTCHPAY_CURRENCY = (process.env.NOTCHPAY_CURRENCY || "XAF").toUpperCase();
+import {
+  CURRENCY_DISPLAY,
+  NOTCHPAY_CURRENCY,
+} from "../utils/pricing.js";
 
 const buildReference = (prefix, userId) =>
   `${prefix}_${userId}_${Date.now()}`;
@@ -33,6 +35,17 @@ const getSubscriptionCallbackUrl = () =>
   process.env.NOTCHPAY_CALLBACK_URL ||
   process.env.CLIENT_URL;
 
+const serializePlan = (plan) => {
+  const plainPlan = plan?.toObject ? plan.toObject() : plan;
+  if (!plainPlan) return plainPlan;
+
+  return {
+    ...plainPlan,
+    currency: NOTCHPAY_CURRENCY,
+    currencyDisplay: CURRENCY_DISPLAY,
+  };
+};
+
 // Get all active plans
 export const getSubscriptionPlans = catchAsync(async (req, res) => {
   const plans = await SubscriptionPlan.find({ isActive: true }).select(
@@ -42,7 +55,7 @@ export const getSubscriptionPlans = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Plans fetched successfully",
-    data: plans,
+    data: plans.map((plan) => serializePlan(plan)),
   });
 });
 
@@ -105,6 +118,7 @@ export const createSubscriptionPayment = catchAsync(async (req, res) => {
     planId,
     price: plan.price,
     finalPrice: plan.price,
+    currency: NOTCHPAY_CURRENCY,
     transactionId: transactionReference,
     providerTransactionId: transaction?.id || null,
     gatewayReference: transaction?.reference || transaction?.id || null,
@@ -122,6 +136,7 @@ export const createSubscriptionPayment = catchAsync(async (req, res) => {
       reference: transactionReference,
       paymentLink: notchPayPayment.authorizationUrl,
       currency: NOTCHPAY_CURRENCY,
+      currencyDisplay: CURRENCY_DISPLAY,
       amountInMinorUnit,
       finalPrice: plan.price,
       status: getNotchPayStatus(notchPayPayment.response),
@@ -317,7 +332,7 @@ export const getSubscriptionPlansAdmin = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Plans fetched successfully",
-    data: plans,
+    data: plans.map((plan) => serializePlan(plan)),
   });
 });
 
@@ -344,7 +359,7 @@ export const addSubscriptionPlan = catchAsync(async (req, res) => {
     statusCode: httpStatus.CREATED,
     success: true,
     message: "Plan added successfully",
-    data: plan,
+    data: serializePlan(plan),
   });
 });
 
@@ -361,7 +376,7 @@ export const updateSubscriptionPlan = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Plan updated successfully",
-    data: plan,
+    data: serializePlan(plan),
   });
 });
 
@@ -387,6 +402,6 @@ export const toggleSubscriptionPlan = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: `Plan ${action}d successfully`,
-    data: plan,
+    data: serializePlan(plan),
   });
 });

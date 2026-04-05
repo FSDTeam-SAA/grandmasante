@@ -6,9 +6,18 @@ import httpStatus from "http-status";
 import sendResponse from "../utils/sendResponse.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import { User } from "./../model/user.model.js";
+import { normalizeCountry } from "../utils/pricing.js";
 
 export const register = catchAsync(async (req, res) => {
-  const { name, email, password, role = "user" } = req.body;
+  const {
+    name,
+    email,
+    password,
+    role = "user",
+    phone,
+    address,
+    country,
+  } = req.body;
   if (!email || !password) {
     throw new AppError(httpStatus.FORBIDDEN, "Please fill in all fields");
   }
@@ -17,12 +26,15 @@ export const register = catchAsync(async (req, res) => {
   if (checkUser)
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Email already exists, please try another email"
+      "Email already exists, please try another email",
     );
   const user = await User.create({
     name,
     email,
     password,
+    phone,
+    address,
+    country: normalizeCountry(country),
     role,
     verificationInfo: { token: "", verified: true },
   });
@@ -34,12 +46,12 @@ export const register = catchAsync(async (req, res) => {
   const accessToken = createToken(
     jwtPayload,
     process.env.JWT_ACCESS_SECRET,
-    process.env.JWT_ACCESS_EXPIRES_IN
+    process.env.JWT_ACCESS_EXPIRES_IN,
   );
   const refreshToken = createToken(
     jwtPayload,
     process.env.JWT_REFRESH_SECRET,
-    process.env.JWT_REFRESH_EXPIRES_IN
+    process.env.JWT_REFRESH_EXPIRES_IN,
   );
   user.refreshToken = refreshToken;
   await user.save();
@@ -74,7 +86,7 @@ export const login = catchAsync(async (req, res) => {
     const otptoken = createToken(
       jwtPayloadOTP,
       process.env.OTP_SECRET,
-      process.env.OTP_EXPIRE
+      process.env.OTP_EXPIRE,
     );
     user.verificationInfo.token = otptoken;
     await user.save();
@@ -95,13 +107,13 @@ export const login = catchAsync(async (req, res) => {
   const accessToken = createToken(
     jwtPayload,
     process.env.JWT_ACCESS_SECRET,
-    process.env.JWT_ACCESS_EXPIRES_IN
+    process.env.JWT_ACCESS_EXPIRES_IN,
   );
 
   const refreshToken = createToken(
     jwtPayload,
     process.env.JWT_REFRESH_SECRET,
-    process.env.JWT_REFRESH_EXPIRES_IN
+    process.env.JWT_REFRESH_EXPIRES_IN,
   );
 
   user.refreshToken = refreshToken;
@@ -141,7 +153,7 @@ export const forgetPassword = catchAsync(async (req, res) => {
   const otpToken = createToken(
     otpPayload,
     process.env.OTP_SECRET,
-    process.env.OTP_EXPIRE
+    process.env.OTP_EXPIRE,
   );
 
   user.password_reset_token = otpToken;
@@ -168,7 +180,7 @@ export const resetPassword = catchAsync(async (req, res) => {
   if (!user.password_reset_token) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Password reset token is invalid or expired"
+      "Password reset token is invalid or expired",
     );
   }
 
@@ -239,13 +251,13 @@ export const changePassword = catchAsync(async (req, res) => {
   if (!oldPassword || !newPassword) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Old password and new password are required"
+      "Old password and new password are required",
     );
   }
   if (oldPassword === newPassword) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Old password and new password cannot be same"
+      "Old password and new password cannot be same",
     );
   }
   const user = await User.findById({ _id: req.user?._id });
@@ -282,12 +294,12 @@ export const refreshToken = catchAsync(async (req, res) => {
   const accessToken = createToken(
     jwtPayload,
     process.env.JWT_ACCESS_SECRET,
-    process.env.JWT_ACCESS_EXPIRES_IN
+    process.env.JWT_ACCESS_EXPIRES_IN,
   );
   const refreshToken1 = createToken(
     jwtPayload,
     process.env.JWT_REFRESH_SECRET,
-    process.env.JWT_REFRESH_EXPIRES_IN
+    process.env.JWT_REFRESH_EXPIRES_IN,
   );
   user.refreshToken = refreshToken1;
   await user.save();
@@ -304,7 +316,7 @@ export const logout = catchAsync(async (req, res) => {
   const user1 = await User.findByIdAndUpdate(
     user,
     { refreshToken: "" },
-    { new: true }
+    { new: true },
   );
   sendResponse(res, {
     statusCode: httpStatus.OK,

@@ -4,6 +4,7 @@ import AppError from "../errors/AppError.js";
 import sendResponse from "../utils/sendResponse.js";
 import catchAsync from "../utils/catchAsync.js";
 import { uploadOnCloudinary } from "../utils/commonMethod.js";
+import { normalizeCountry } from "../utils/pricing.js";
 
 export const getProfile = catchAsync(async (req, res) => {
   const user = await User.findById(req.user._id).select(
@@ -18,7 +19,7 @@ export const getProfile = catchAsync(async (req, res) => {
 });
 
 export const updateProfile = catchAsync(async (req, res) => {
-  const { name, phone } = req.body;
+  const { name, phone, address, country } = req.body;
 
   // Find user
   const user = await User.findById(req.user._id).select(
@@ -29,8 +30,12 @@ export const updateProfile = catchAsync(async (req, res) => {
   }
 
   // Update profile fields
-  if (name) user.name = name;
-  if (phone) user.phone = phone;
+  if (typeof name !== "undefined") user.name = name;
+  if (typeof phone !== "undefined") user.phone = phone;
+  if (typeof address !== "undefined") user.address = address;
+  if (typeof country !== "undefined") {
+    user.country = normalizeCountry(country);
+  }
 
   // Upload new photo if provided
   if (req.file) {
@@ -65,7 +70,7 @@ export const getUsers = catchAsync(async (req, res) => {
   const users = await User.paginate(filter, {
     page: Number(page),
     limit: Number(limit),
-    select: "name email createdAt credit currentPlan status role",
+    select: "name email country createdAt credit currentPlan status role",
     sort: { createdAt: -1 },
   });
 

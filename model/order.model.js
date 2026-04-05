@@ -11,7 +11,16 @@ const orderSchema = new Schema(
         quantity: { type: Number, min: 1 },
       },
     ],
+    subtotal: { type: Number, default: 0 },
+    consultationFee: { type: Number, default: 0 },
+    grandmaSanteInteractFee: { type: Number, default: 0 },
     total: { type: Number },
+    currency: { type: String, default: "XAF" },
+    deliveryCountry: { type: String },
+    deliveryCoordinates: {
+      latitude: { type: Number },
+      longitude: { type: Number },
+    },
     status: {
       type: String,
       enum: ["ongoing", "completed", "delivered"],

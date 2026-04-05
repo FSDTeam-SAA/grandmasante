@@ -5,6 +5,21 @@ import cloudinary from "cloudinary";
 import AppError from "../errors/AppError.js";
 import sendResponse from "../utils/sendResponse.js";
 import catchAsync from "../utils/catchAsync.js";
+import {
+  CURRENCY_DISPLAY,
+  NOTCHPAY_CURRENCY,
+} from "../utils/pricing.js";
+
+const serializeProduct = (product) => {
+  const plainProduct = product?.toObject ? product.toObject() : product;
+  if (!plainProduct) return plainProduct;
+
+  return {
+    ...plainProduct,
+    currency: NOTCHPAY_CURRENCY,
+    currencyDisplay: CURRENCY_DISPLAY,
+  };
+};
 
 export const getProducts = catchAsync(async (req, res) => {
   const { page = 1, limit = 10 } = req.query;
@@ -17,6 +32,7 @@ export const getProducts = catchAsync(async (req, res) => {
       sort: { addedDate: -1 },
     }
   );
+  products.docs = products.docs.map((product) => serializeProduct(product));
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
@@ -50,7 +66,7 @@ export const addProduct = catchAsync(async (req, res) => {
     statusCode: httpStatus.CREATED,
     success: true,
     message: "Product added successfully",
-    data: product,
+    data: serializeProduct(product),
   });
 });
 
@@ -81,7 +97,7 @@ export const updateProduct = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Product updated successfully",
-    data: product,
+    data: serializeProduct(product),
   });
 });
 
@@ -96,6 +112,6 @@ export const deleteProduct = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     success: true,
     message: "Product deleted successfully",
-    data: product,
+    data: serializeProduct(product),
   });
 });
