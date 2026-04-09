@@ -4,6 +4,31 @@ import { Product } from "../model/product.model.js";
 import AppError from "../errors/AppError.js";
 import sendResponse from "../utils/sendResponse.js";
 import catchAsync from "../utils/catchAsync.js";
+import {
+  CURRENCY_DISPLAY,
+  NOTCHPAY_CURRENCY,
+} from "../utils/pricing.js";
+
+const serializeCartItems = (items = []) =>
+  items
+    .filter((item) => item?.product)
+    .map((item) => {
+      const plainItem = item?.toObject ? item.toObject() : item;
+      const plainProduct = plainItem?.product?.toObject
+        ? plainItem.product.toObject()
+        : plainItem?.product;
+
+      return {
+        ...plainItem,
+        product: plainProduct
+          ? {
+              ...plainProduct,
+              currency: NOTCHPAY_CURRENCY,
+              currencyDisplay: CURRENCY_DISPLAY,
+            }
+          : null,
+      };
+    });
 
 export const manageCart = catchAsync(async (req, res) => {
   const { productId, quantity, action = "add" } = req.body;
@@ -20,7 +45,7 @@ export const manageCart = catchAsync(async (req, res) => {
 
   if (action === "get") {
     if (cart) await cart.populate("items.product");
-    const data = cart ? cart.items : [];
+    const data = cart ? serializeCartItems(cart.items) : [];
     return sendResponse(res, {
       statusCode: httpStatus.OK,
       success: true,
@@ -56,7 +81,7 @@ export const manageCart = catchAsync(async (req, res) => {
       statusCode: httpStatus.OK,
       success: true,
       message: "Product removed from cart",
-      data: { cart: cart.items },
+      data: { cart: serializeCartItems(cart.items) },
     });
   }
 
@@ -85,7 +110,7 @@ export const manageCart = catchAsync(async (req, res) => {
       statusCode: httpStatus.OK,
       success: true,
       message: "Cart item updated",
-      data: { cart: cart.items },
+      data: { cart: serializeCartItems(cart.items) },
     });
   }
 
@@ -114,7 +139,7 @@ export const manageCart = catchAsync(async (req, res) => {
       statusCode: httpStatus.OK,
       success: true,
       message: "Product added to cart",
-      data: { cart: cart.items },
+      data: { cart: serializeCartItems(cart.items) },
     });
   }
 

@@ -42,7 +42,8 @@ export const getProducts = catchAsync(async (req, res) => {
 });
 
 export const addProduct = catchAsync(async (req, res) => {
-  const { name, totalUnit, unit = "pieces", perPrice } = req.body;
+  const { name, description = "", totalUnit, unit = "pieces", perPrice } =
+    req.body;
   if (!name || !totalUnit || totalUnit <= 0 || !perPrice || perPrice <= 0) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
@@ -56,6 +57,7 @@ export const addProduct = catchAsync(async (req, res) => {
   }
   const product = await Product.create({
     name,
+    description,
     image,
     totalUnit,
     remainingUnit: totalUnit,
@@ -71,7 +73,7 @@ export const addProduct = catchAsync(async (req, res) => {
 });
 
 export const updateProduct = catchAsync(async (req, res) => {
-  const { name, totalUnit, unit, perPrice } = req.body;
+  const { name, description, totalUnit, unit, perPrice } = req.body;
   if (totalUnit && totalUnit <= 0) {
     throw new AppError(httpStatus.BAD_REQUEST, "totalUnit must be positive");
   }
@@ -80,7 +82,7 @@ export const updateProduct = catchAsync(async (req, res) => {
   }
   const product = await Product.findByIdAndUpdate(
     req.params.id,
-    { name, totalUnit, unit, perPrice },
+    { name, description, totalUnit, unit, perPrice },
     { new: true }
   );
   if (!product) throw new AppError(httpStatus.NOT_FOUND, "Product not found");

@@ -4,6 +4,7 @@ import mongoosePaginate from "mongoose-paginate-v2";
 const productSchema = new Schema(
   {
     name: { type: String },
+    description: { type: String, trim: true, default: "" },
     image: {
       public_id: { type: String },
       url: { type: String },

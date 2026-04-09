@@ -123,7 +123,26 @@ export const createPaymentForProduct = catchAsync(async (req, res) => {
     if (!cart || cart.items.length === 0) {
       throw new AppError(httpStatus.BAD_REQUEST, "Cart is empty");
     }
-    products = cart.items.map((item) => ({
+    const validCartItems = cart.items.filter(
+      (item) => item?.product && item.product._id,
+    );
+
+    if (validCartItems.length !== cart.items.length) {
+      cart.items = validCartItems.map((item) => ({
+        product: item.product._id,
+        quantity: item.quantity,
+      }));
+      await cart.save();
+    }
+
+    if (validCartItems.length === 0) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Cart contains unavailable products. Please refresh your cart",
+      );
+    }
+
+    products = validCartItems.map((item) => ({
       productId: item.product._id,
       quantity: item.quantity,
       price: item.product.perPrice,
@@ -452,7 +471,10 @@ export const getOrders = catchAsync(async (req, res) => {
   const { page = 1, limit = 10, status } = req.query;
   const userId = req.user._id;
 
-  const filter = { user: userId };
+  const filter = {
+    user: userId,
+    "payment.status": "paid",
+  };
   if (status) filter.status = status;
 
   const orders = await Order.paginate(filter, {
