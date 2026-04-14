@@ -1,4 +1,5 @@
 import AppError from "../errors/AppError.js";
+import crypto from "crypto";
 import { createToken, verifyToken } from "../utils/authToken.js";
 import catchAsync from "../utils/catchAsync.js";
 import { generateOTP } from "../utils/commonMethod.js";
@@ -7,6 +8,40 @@ import sendResponse from "../utils/sendResponse.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import { User } from "./../model/user.model.js";
 import { normalizeCountry } from "../utils/pricing.js";
+import { verifyFirebaseIdToken } from "../utils/firebaseToken.js";
+
+const issueAppTokens = async (user) => {
+  const jwtPayload = {
+    _id: user._id,
+    email: user.email,
+    role: user.role,
+  };
+
+  const accessToken = createToken(
+    jwtPayload,
+    process.env.JWT_ACCESS_SECRET,
+    process.env.JWT_ACCESS_EXPIRES_IN,
+  );
+  const refreshToken = createToken(
+    jwtPayload,
+    process.env.JWT_REFRESH_SECRET,
+    process.env.JWT_REFRESH_EXPIRES_IN,
+  );
+
+  user.refreshToken = refreshToken;
+  await user.save();
+
+  return {
+    accessToken,
+    refreshToken,
+    role: user.role,
+    _id: user._id,
+    user,
+  };
+};
+
+const generateSystemPassword = () =>
+  `G-${crypto.randomBytes(24).toString("base64url")}!9aA`;
 
 export const register = catchAsync(async (req, res) => {
   const {
@@ -137,6 +172,92 @@ export const login = catchAsync(async (req, res) => {
       _id: user._id,
       user: user,
     },
+  });
+});
+
+export const googleSignUp = catchAsync(async (req, res) => {
+  const {
+    idToken,
+    name,
+    role = "user",
+    phone = "",
+    address = "",
+    country = "",
+  } = req.body;
+
+  const decodedToken = await verifyFirebaseIdToken(idToken);
+  const email = decodedToken?.email?.toLowerCase().trim();
+
+  if (!email) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Google email not found");
+  }
+
+  const existingUser = await User.findOne({ email });
+  if (existingUser) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      "Account already exists. Please use Google sign in.",
+    );
+  }
+
+  const allowedRoles = ["user", "commercial", "in_house"];
+  if (!allowedRoles.includes(role)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Invalid role selected");
+  }
+
+  const createdUser = await User.create({
+    name: name?.trim() || decodedToken?.name || "Google User",
+    email,
+    password: generateSystemPassword(),
+    role,
+    phone: phone?.trim() || "",
+    address: address?.trim() || "",
+    country: normalizeCountry(country),
+    avatar: {
+      public_id: "",
+      url: decodedToken?.picture || "",
+    },
+    verificationInfo: {
+      token: "",
+      verified: true,
+    },
+  });
+
+  const authData = await issueAppTokens(createdUser);
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Google sign up successful",
+    data: authData,
+  });
+});
+
+export const googleSignIn = catchAsync(async (req, res) => {
+  const { idToken } = req.body;
+
+  const decodedToken = await verifyFirebaseIdToken(idToken);
+  const email = decodedToken?.email?.toLowerCase().trim();
+
+  if (!email) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Google email not found");
+  }
+
+  const existingUser = await User.findOne({ email });
+  if (!existingUser) {
+    throw new AppError(
+      httpStatus.NOT_FOUND,
+      "Account not found. Please sign up first.",
+    );
+  }
+
+  const authData = await issueAppTokens(existingUser);
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Google sign in successful",
+    data: authData,
   });
 });
 
