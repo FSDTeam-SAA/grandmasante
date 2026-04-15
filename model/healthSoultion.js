@@ -7,6 +7,18 @@ const remedySchema = new mongoose.Schema(
     tags: [{ type: String }], // e.g. ["1–2 cups daily", "best before bed"]
     howToUse: { type: String, required: true },
     notes: { type: String }, // optional extra info
+    image: {
+      publicId: { type: String },
+      url: { type: String },
+      thumbnailUrl: { type: String },
+      source: { type: String },
+      sourcePage: { type: String },
+      license: { type: String },
+      licenseUrl: { type: String },
+      creator: { type: String },
+      creatorUrl: { type: String },
+      attribution: { type: String },
+    },
   },
   { _id: false }
 );
@@ -38,7 +50,13 @@ const healthSolutionSchema = new mongoose.Schema(
       additionalInfo: {
         category: {
           type: String,
-          enum: ["Adult (18-65)", "Senior (65+)", "Young Adult (13-17)", "Child (3-12)", "Infant (0-2)"],
+          enum: [
+            "Infant (0-2)",
+            "Child (3-12)",
+            "Young Adult (13-17)",
+            "Adult (18-64)",
+            "Senior (65+)",
+          ],
           required: true,
         },
         sex: { type: String, enum: ["Male", "Female", "Other"], required: true },
