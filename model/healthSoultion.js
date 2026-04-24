@@ -40,6 +40,14 @@ const conditionSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const emergencyAlertSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true },
+    message: { type: String, required: true },
+  },
+  { _id: false }
+);
+
 const healthSolutionSchema = new mongoose.Schema(
   {
     // If you have auth, store req.user.id here
@@ -76,6 +84,7 @@ const healthSolutionSchema = new mongoose.Schema(
       recommendedTests: [testSchema],
       disclaimer: { type: String, required: true },
       redFlags: [{ type: String }], // e.g. “chest pain + shortness of breath”
+      emergencyAlert: { type: emergencyAlertSchema, default: null },
     },
 
     // Store model metadata for audit/debugging

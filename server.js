@@ -6,8 +6,10 @@ import cookieParser from "cookie-parser";
 import router from "./mainroute/index.js";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import jwt from "jsonwebtoken";
 import globalErrorHandler from "./middleware/globalErrorHandler.js";
 import notFound from "./middleware/notFound.js";
+import { User } from "./model/user.model.js";
 
 const app = express();
 
@@ -20,6 +22,8 @@ export const io = new Server(server, {
     methods: ["GET", "POST"],
   },
 });
+
+export const userSocketRoom = (userId) => `user:${userId}`;
 
 app.use(
   cors({
@@ -47,10 +51,46 @@ app.use(globalErrorHandler);
 app.use(notFound);
 
 // Socket.io
-io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+io.use(async (socket, next) => {
+  try {
+    const authToken =
+      socket.handshake.auth?.token ||
+      socket.handshake.headers?.authorization?.split(" ")[1];
 
-  socket.on("join", (userId) => {
+    if (!authToken) {
+      return next(new Error("Socket token missing"));
+    }
+
+    const decoded = jwt.verify(authToken, process.env.JWT_ACCESS_SECRET);
+    const user = await User.findById(decoded._id).select(
+      "name email phone role verificationInfo avatar country"
+    );
+
+    if (!user || !user.verificationInfo?.verified) {
+      return next(new Error("Socket user not authorized"));
+    }
+
+    socket.user = user;
+    return next();
+  } catch (error) {
+    return next(new Error("Invalid socket token"));
+  }
+});
+
+io.on("connection", (socket) => {
+  const userId = socket.user._id.toString();
+
+  socket.join(userSocketRoom(userId));
+  socket.join(userId);
+
+  if (socket.user.role === "admin") {
+    socket.join("admin");
+  }
+
+  console.log("User connected:", socket.id, userId);
+
+  socket.on("join", () => {
+    socket.join(userSocketRoom(userId));
     socket.join(userId);
   });
 
