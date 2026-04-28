@@ -1,10 +1,23 @@
 import mongoose, { Schema } from "mongoose";
 import mongoosePaginate from "mongoose-paginate-v2";
 
+export const PRODUCT_CATEGORIES = [
+  "herbal-remedies",
+  "teas",
+  "tinctures",
+  "essential-oils",
+];
+
 const productSchema = new Schema(
   {
     name: { type: String },
     description: { type: String, trim: true, default: "" },
+    category: {
+      type: String,
+      enum: PRODUCT_CATEGORIES,
+      required: false,
+      default: undefined,
+    },
     image: {
       public_id: { type: String },
       url: { type: String },

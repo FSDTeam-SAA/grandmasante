@@ -43,6 +43,25 @@ const issueAppTokens = async (user) => {
 const generateSystemPassword = () =>
   `G-${crypto.randomBytes(24).toString("base64url")}!9aA`;
 
+const buildRegistrationVerificationPayload = ({
+  name,
+  email,
+  password,
+  role,
+  phone,
+  address,
+  country,
+}) => ({
+  purpose: "registration",
+  name: name?.trim() || "",
+  email: email?.toLowerCase().trim(),
+  password,
+  role,
+  phone: phone?.trim() || "",
+  address: address?.trim() || "",
+  country: normalizeCountry(country),
+});
+
 export const register = catchAsync(async (req, res) => {
   const {
     name,
@@ -57,46 +76,55 @@ export const register = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.FORBIDDEN, "Please fill in all fields");
   }
 
-  const checkUser = await User.findOne({ email: email });
+  const normalizedEmail = email.toLowerCase().trim();
+  const finalRole = role?.trim() || "user";
+  const allowedRoles = ["user", "commercial", "in_house"];
+
+  if (!allowedRoles.includes(finalRole)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Invalid role selected");
+  }
+
+  const checkUser = await User.findOne({ email: normalizedEmail });
   if (checkUser)
     throw new AppError(
       httpStatus.BAD_REQUEST,
       "Email already exists, please try another email",
     );
-  const user = await User.create({
+
+  const otp = generateOTP();
+  const verificationPayload = buildRegistrationVerificationPayload({
     name,
-    email,
+    email: normalizedEmail,
     password,
+    role: finalRole,
     phone,
     address,
-    country: normalizeCountry(country),
-    role,
-    verificationInfo: { token: "", verified: true },
+    country,
   });
-  const jwtPayload = {
-    _id: user._id,
-    email: user.email,
-    role: user.role,
-  };
-  const accessToken = createToken(
-    jwtPayload,
-    process.env.JWT_ACCESS_SECRET,
-    process.env.JWT_ACCESS_EXPIRES_IN,
+  const verificationToken = createToken(
+    {
+      ...verificationPayload,
+      otp,
+    },
+    process.env.OTP_SECRET,
+    process.env.OTP_EXPIRE,
   );
-  const refreshToken = createToken(
-    jwtPayload,
-    process.env.JWT_REFRESH_SECRET,
-    process.env.JWT_REFRESH_EXPIRES_IN,
+
+  await sendEmail(
+    normalizedEmail,
+    "Verify your Grandma Sante account",
+    `Your OTP is ${otp}`,
   );
-  user.refreshToken = refreshToken;
-  await user.save();
-  const userObj = user.toObject();
-  userObj.accessToken = accessToken;
+
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
-    message: "User registered successfully",
-    data: userObj,
+    message: "OTP sent to your email successfully",
+    data: {
+      email: normalizedEmail,
+      verificationToken,
+      purpose: "registration",
+    },
   });
 });
 
@@ -329,24 +357,87 @@ export const resetPassword = catchAsync(async (req, res) => {
 });
 
 export const verifyEmail = catchAsync(async (req, res) => {
-  const { email, otp } = req.body;
+  const { email, otp, verificationToken } = req.body;
+
+  if (!otp) {
+    throw new AppError(httpStatus.BAD_REQUEST, "OTP is required");
+  }
+
+  if (verificationToken) {
+    let decodedRegistrationToken;
+
+    try {
+      decodedRegistrationToken = verifyToken(
+        verificationToken,
+        process.env.OTP_SECRET,
+      );
+    } catch (err) {
+      throw new AppError(httpStatus.BAD_REQUEST, "OTP expired or invalid");
+    }
+
+    if (decodedRegistrationToken.purpose !== "registration") {
+      throw new AppError(httpStatus.BAD_REQUEST, "Invalid verification token");
+    }
+
+    if (
+      email &&
+      decodedRegistrationToken.email !== email.toLowerCase().trim()
+    ) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Email does not match");
+    }
+
+    if (decodedRegistrationToken.otp !== otp) {
+      throw new AppError(httpStatus.BAD_REQUEST, "Invalid OTP");
+    }
+
+    const existingUser = await User.findOne({
+      email: decodedRegistrationToken.email,
+    });
+
+    if (existingUser) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Email already exists, please try another email",
+      );
+    }
+
+    await User.create({
+      name: decodedRegistrationToken.name,
+      email: decodedRegistrationToken.email,
+      password: decodedRegistrationToken.password,
+      phone: decodedRegistrationToken.phone,
+      address: decodedRegistrationToken.address,
+      country: decodedRegistrationToken.country,
+      role: decodedRegistrationToken.role,
+      verificationInfo: {
+        token: "",
+        verified: true,
+      },
+    });
+
+    return sendResponse(res, {
+      statusCode: httpStatus.OK,
+      success: true,
+      message: "Account created successfully",
+      data: null,
+    });
+  }
 
   const user = await User.isUserExistsByEmail(email);
   if (!user) {
     throw new AppError(httpStatus.NOT_FOUND, "User not found");
   }
 
-  if (!otp) {
-    throw new AppError(httpStatus.BAD_REQUEST, "OTP is required");
-  }
+  const storedVerificationToken =
+    user.verificationInfo?.token || user.password_reset_token;
 
-  if (!user.password_reset_token) {
+  if (!storedVerificationToken) {
     throw new AppError(httpStatus.BAD_REQUEST, "Verification token missing");
   }
 
   let decoded;
   try {
-    decoded = verifyToken(user.password_reset_token, process.env.OTP_SECRET);
+    decoded = verifyToken(storedVerificationToken, process.env.OTP_SECRET);
   } catch (err) {
     throw new AppError(httpStatus.BAD_REQUEST, "OTP expired or invalid");
   }
@@ -355,7 +446,10 @@ export const verifyEmail = catchAsync(async (req, res) => {
     throw new AppError(httpStatus.BAD_REQUEST, "Invalid OTP");
   }
 
-  user.isVerified = true;
+  if (user.verificationInfo?.token) {
+    user.verificationInfo.verified = true;
+  }
+
   user.verificationInfo.token = "";
   await user.save();
 

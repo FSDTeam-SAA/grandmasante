@@ -1,5 +1,5 @@
 import httpStatus from "http-status";
-import { Product } from "../model/product.model.js";
+import { Product, PRODUCT_CATEGORIES } from "../model/product.model.js";
 import { uploadOnCloudinary } from "../utils/commonMethod.js";
 import cloudinary from "cloudinary";
 import AppError from "../errors/AppError.js";
@@ -16,15 +16,40 @@ const serializeProduct = (product) => {
 
   return {
     ...plainProduct,
+    category: plainProduct.category ?? null,
     currency: NOTCHPAY_CURRENCY,
     currencyDisplay: CURRENCY_DISPLAY,
   };
 };
 
+const normalizeCategory = (category) => {
+  if (typeof category !== "string") return undefined;
+  const normalized = category.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (!PRODUCT_CATEGORIES.includes(normalized)) {
+    throw new AppError(httpStatus.BAD_REQUEST, "Invalid product category");
+  }
+  return normalized;
+};
+
 export const getProducts = catchAsync(async (req, res) => {
-  const { page = 1, limit = 10 } = req.query;
+  const { page = 1, limit = 10, search = "", category } = req.query;
+  const query = {};
+  const normalizedCategory = normalizeCategory(category);
+
+  if (normalizedCategory) {
+    query.category = normalizedCategory;
+  }
+
+  if (typeof search === "string" && search.trim()) {
+    query.$or = [
+      { name: { $regex: search.trim(), $options: "i" } },
+      { description: { $regex: search.trim(), $options: "i" } },
+    ];
+  }
+
   const products = await Product.paginate(
-    {},
+    query,
     {
       page: parseInt(page),
       limit: parseInt(limit),
@@ -42,7 +67,14 @@ export const getProducts = catchAsync(async (req, res) => {
 });
 
 export const addProduct = catchAsync(async (req, res) => {
-  const { name, description = "", totalUnit, unit = "pieces", perPrice } =
+  const {
+    name,
+    description = "",
+    category,
+    totalUnit,
+    unit = "pieces",
+    perPrice,
+  } =
     req.body;
   if (!name || !totalUnit || totalUnit <= 0 || !perPrice || perPrice <= 0) {
     throw new AppError(
@@ -58,6 +90,7 @@ export const addProduct = catchAsync(async (req, res) => {
   const product = await Product.create({
     name,
     description,
+    category: normalizeCategory(category),
     image,
     totalUnit,
     remainingUnit: totalUnit,
@@ -73,16 +106,29 @@ export const addProduct = catchAsync(async (req, res) => {
 });
 
 export const updateProduct = catchAsync(async (req, res) => {
-  const { name, description, totalUnit, unit, perPrice } = req.body;
+  const { name, description, category, totalUnit, unit, perPrice } = req.body;
   if (totalUnit && totalUnit <= 0) {
     throw new AppError(httpStatus.BAD_REQUEST, "totalUnit must be positive");
   }
   if (perPrice && perPrice <= 0) {
     throw new AppError(httpStatus.BAD_REQUEST, "perPrice must be positive");
   }
+
+  const updatePayload = {
+    name,
+    description,
+    totalUnit,
+    unit,
+    perPrice,
+  };
+
+  if (Object.prototype.hasOwnProperty.call(req.body, "category")) {
+    updatePayload.category = normalizeCategory(category);
+  }
+
   const product = await Product.findByIdAndUpdate(
     req.params.id,
-    { name, description, totalUnit, unit, perPrice },
+    updatePayload,
     { new: true }
   );
   if (!product) throw new AppError(httpStatus.NOT_FOUND, "Product not found");

@@ -1,19 +1,42 @@
-import nodemailer from 'nodemailer';
-export const sendEmail = async (to,subject, html) => {
+import nodemailer from "nodemailer";
+
+const parseSecureFlag = (value) => String(value).toLowerCase() === "true";
+
+const buildHtmlBody = (content) => {
+  const hasHtmlTags = /<\/?[a-z][\s\S]*>/i.test(content);
+
+  if (hasHtmlTags) {
+    return content;
+  }
+
+  return `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
+      <p>${content}</p>
+    </div>
+  `;
+};
+
+export const sendEmail = async (to, subject, content) => {
   const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false,
+    host: process.env.MAIL_HOST || "smtp.gmail.com",
+    port: Number(process.env.MAIL_PORT || 587),
+    secure: parseSecureFlag(process.env.MAIL_SECURE),
     auth: {
-      user: 'tahsin.bdcalling@gmail.com',
-      pass: 'lcnt cxiw pcui vikv',
+      user: process.env.MAIL_USER,
+      pass: process.env.MAIL_PASS,
     },
   });
+
+  const fromName = process.env.MAIL_FROM_NAME || "grandmasante";
+  const fromAddress = process.env.MAIL_FROM || process.env.MAIL_USER;
+  const message = content || "Your OTP is ready.";
+
   await transporter.sendMail({
-    from: 'tahsin.bdcalling@gmail.com', // sender address
+    from: `"${fromName}" <${fromAddress}>`,
     to,
-    subject: subject? subject:  'Password change Link : change it by 10 minutes',
-    html,
+    subject: subject || "Password change Link : change it by 10 minutes",
+    text: message,
+    html: buildHtmlBody(message),
   });
 };
 
