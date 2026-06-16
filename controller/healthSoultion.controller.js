@@ -1502,37 +1502,6 @@ function normalizePossibleConditions(conditions, symptoms, language = "en") {
     if (/dengue/.test(normalizedName)) {
       return "Dengue can cause fever with strong headache, body aches, eye pain, or rash. A blood test is needed when dengue is suspected.";
     }
-    if (/viral|flu|fever/.test(normalizedName)) {
-      return "Fever with headache often fits a viral infection such as seasonal flu. Rest, fluids, and monitoring are important.";
-    }
-    if (/tension/.test(normalizedName)) {
-      return "Tension headache often comes from stress or muscle tightness. It may feel like pressure around the head.";
-    }
-    if (/migraine/.test(normalizedName)) {
-      return "Migraine can cause stronger or one-sided headache. Light sensitivity or nausea may also happen.";
-    }
-    if (/dehydration|fluid/.test(normalizedName)) {
-      return "Low fluid intake can trigger headache and tiredness. Symptoms may worsen after heat or sweating.";
-    }
-    if (/sinus/.test(normalizedName)) {
-      return "Sinus pressure can cause forehead or facial headache. Congestion or facial tenderness makes it more likely.";
-    }
-    if (/sleep|fatigue/.test(normalizedName)) {
-      return "Poor sleep can make headaches feel stronger. Rest, fluids, and regular meals may help.";
-    }
-    if (/indigestion|dyspepsia/.test(normalizedName)) {
-      return "Indigestion can cause upper stomach pain or burning. It often appears after heavy or spicy meals.";
-    }
-    if (/gas|bloating/.test(normalizedName)) {
-      return "Gas can cause cramping or pressure in the belly. It often changes after meals or movement.";
-    }
-    if (/constipation/.test(normalizedName)) {
-      return "Constipation can cause lower belly pressure or cramps. Hard or infrequent stool makes it more likely.";
-    }
-    if (/gastritis|stomach irritation/.test(normalizedName)) {
-      return "Stomach lining irritation can cause pain or burning. Spicy food or pain relievers may worsen it.";
-    }
-
     const cleaned = cleanRationale(rationale);
     const sentences = cleaned
       .split(/(?<=[.!?])\s+/)
