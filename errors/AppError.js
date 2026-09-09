@@ -1,7 +1,3 @@
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-
 class AppError extends Error {
   constructor(statusCode, message, stack) {
     super(message);
